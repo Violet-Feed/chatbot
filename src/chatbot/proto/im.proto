@@ -1,0 +1,370 @@
+syntax = "proto3";
+package im;
+option java_multiple_files = true;
+option java_package = "violet.gateway.common.proto_gen.im";
+option go_package = "im/proto_gen/im";
+
+import "common.proto";
+
+enum ConversationType{
+  ConversationType_Not_Use = 0;
+  One_Chat = 1;
+  Group_Chat = 2;
+  Service_Chat = 3;
+  AI_Chat = 4;
+  System_Chat = 5;
+}
+
+enum MessageType{
+  MessageType_Not_Use = 0;
+  Text = 1;
+  Image = 2;
+  Video = 3;
+  Forward = 4;
+  Conversation = 5;
+  MarkRead = 101;
+  UpdateMessage = 102;
+}
+
+enum ConMessageType{
+  ConMessageType_Not_Use = 0;
+  Add_Member = 1;
+  Remove_Member = 2;
+  Modify_Name = 3;
+  Modify_Description = 4;
+}
+
+message MessageEvent{
+  MessageBody msg_body = 1;
+  int64 con_index = 2;
+  bool stored = 3;
+  int64 user_con_index = 4;
+  int64 pre_user_con_index = 5;
+  int64 badge_count = 6;
+  int64 user_cmd_index = 7;
+  int32 retry_count = 8;
+}
+
+message ConversationMessage{
+  ConversationInfo con_info = 1;
+  repeated MessageBody msg_bodies = 2;
+}
+
+message MessageBody{
+  int64 user_id = 1;
+  string con_id = 2;
+  int64 con_short_id = 3;
+  int32 con_type = 4;
+  int64 client_msg_id = 5;
+  int64 msg_id = 6;
+  int32 msg_type = 7;
+  string msg_content = 8;
+  int64 create_time = 9;
+  string extra = 10;
+  int64 con_index = 11;
+}
+
+message ConversationInfo{
+  int64 con_short_id = 1;
+  string con_id = 2;
+  int32 con_type = 3;
+  int64 user_con_index = 4;
+  int64 badge_count = 5;
+  bool is_member = 6;
+  repeated ConversationUserInfo members = 7;
+  ConversationCoreInfo con_core_info = 8;
+  ConversationSettingInfo con_setting_info = 9;
+}
+
+message ConversationCoreInfo {
+  int64 con_short_id = 1;
+  string con_id = 2;
+  int32 con_type = 3;
+  string name = 4;
+  string avatar_uri = 5;
+  string description = 6;
+  int64 owner_id = 7;
+  int64 create_time = 8;
+  int64 modify_time = 9;
+  int32 status = 10;
+  string extra = 11;
+  int32 member_count = 12;
+}
+
+message ConversationSettingInfo{
+  int64 user_id = 1;
+  int64 con_short_id = 2;
+  int32 con_type = 3;
+  int64 min_index = 4;
+  int64 top_timestamp = 5;
+  int32 push_status = 6;
+  int64 modify_time = 7;
+  string extra = 8;
+  int64 read_index_end = 9;
+  int64 read_badge_count = 10;
+}
+
+message ConversationUserInfo {
+  int64 con_short_id = 1;
+  int64 user_id = 2;
+  int32 privilege = 3;
+  string nick_name = 4;
+  int64 create_time = 5;
+  int64 modify_time = 6;
+  int32 status = 7;
+  string extra = 8;
+}
+
+message SendMessageRequest{
+  int64 user_id = 1;
+  int64 con_short_id = 2;
+  string con_id = 3;
+  int32 con_type = 4;
+  int64 client_msg_id = 5;
+  int32 msg_type = 6;
+  string msg_content = 7;
+}
+message SendMessageResponse{
+  int64 msg_id = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetMessageByUserRequest{
+  int64 user_id = 1;
+  int64 user_con_index = 2;
+  int64 limit = 3;
+}
+message GetMessageByUserResponse{
+  repeated ConversationMessage cons = 1;
+  int64 user_con_index = 2;
+  bool has_more = 3;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCommandByUserRequest{
+  int64 user_id = 1;
+  int64 user_cmd_index = 2;
+  int64 limit = 3;
+}
+message GetCommandByUserResponse{
+  repeated MessageBody msg_bodies = 1;
+  int64 user_cmd_index = 2;
+  bool has_more = 3;
+  common.BaseResp baseResp = 255;
+}
+
+message GetMessageByConversationRequest{
+  int64 user_id = 1;
+  int64 con_short_id = 2;
+  int64 con_index = 3;
+  int64 limit = 4;
+}
+message GetMessageByConversationResponse{
+  repeated MessageBody msg_bodies = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message MarkReadRequest{
+  int64 user_id = 1;
+  int64 con_short_id = 2;
+  int64 read_con_index = 3;
+  int64 read_badge_count = 4;
+}
+message MarkReadResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message CreateConversationRequest{
+  string con_id = 1;
+  int32 con_type = 2;
+  string name = 3;
+  string avatar_uri = 4;
+  string description = 5;
+  string notice = 6;
+  int64 owner_id = 7;
+  repeated int64 members = 8;
+  string extra = 9;
+}
+message CreateConversationResponse{
+  ConversationCoreInfo con_core_info = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetConversationInfoRequest{
+  int64 user_id = 1;
+  int64 con_short_id = 2;
+}
+message GetConversationInfoResponse{
+  ConversationInfo con_info = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message AddConversationMembersRequest{
+  int64 con_short_id = 1;
+  string con_id = 2;
+  repeated int64 members = 3;
+  int64 operator = 4;
+}
+message AddConversationMembersResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message GetConversationMembersRequest{
+  int64 con_short_id = 1;
+}
+message GetConversationMembersResponse{
+  repeated ConversationUserInfo members = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetMembersReadIndexRequest{
+  int64 con_short_id = 1;
+}
+message GetMembersReadIndexResponse{
+  map<int64, int64> read_index = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message AgentInfo{
+  int64 agent_id = 1;
+  string agent_name = 2;
+  string avatar_uri = 3;
+  string description = 4;
+  string personality = 5;
+  int64 owner_id = 6;
+  int64 create_time = 7;
+  int64 modify_time = 8;
+  int32 status = 9;
+  string extra = 10;
+}
+
+message ConversationAgentInfo{
+  int64 con_short_id = 1;
+  int64 agent_id = 2;
+  int64 create_time = 3;
+  int64 modify_time = 4;
+  int32 status = 5;
+  string extra = 6;
+  AgentInfo agent_info = 7;
+}
+
+message GetConversationAgentsRequest{
+  int64 con_short_id = 1;
+}
+message GetConversationAgentsResponse{
+  repeated ConversationAgentInfo agents = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message RagModelMessage{
+  string content = 1;
+  string role = 2;
+}
+message RagModelRequest{
+  string query = 1;
+  string conversation_id = 2;
+  repeated RagModelMessage history = 3;
+  string source = 4;
+}
+
+enum NoticeGroup{
+  NoticeGroup_Not_Use = 0;
+  System_Group = 1;
+  Follow_Group = 2;
+  Action_Group = 3;
+}
+
+enum NoticeType{
+  NoticeType_Not_Use = 0;
+  System = 1;
+  Follow = 2;
+  Digg = 3;
+  DiggComment = 4;
+  CreateComment = 5;
+  CreateReply = 6;
+}
+
+message NoticeBody{
+  int64 notice_id = 1;
+  int32 notice_type = 2;
+  string notice_content = 3;
+  int64 sender_id = 4;
+  int64 ref_id = 5;
+  int64 create_time = 6;
+  int64 agg_count = 7;
+}
+
+message NoticeAggBody{
+  int64 sender_id = 1;
+  int64 create_time = 2;
+  string extra = 3;
+}
+
+message SendNoticeRequest{
+  int64 user_id = 1;
+  int32 group = 2;
+  int32 notice_type = 3;
+  string notice_content = 4;
+  int64 sender_id = 5;
+  int64 ref_id = 6;
+  string agg_field = 7;
+}
+message SendNoticeResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message GetNoticeListRequest{
+  int64 user_id = 1;
+  int32 group = 2;
+  int64 page = 3;
+}
+message GetNoticeListResponse{
+  repeated NoticeBody notices = 1;
+  bool has_more = 2;
+  common.BaseResp baseResp = 255;
+}
+
+message GetNoticeAggListRequest{
+  int64 notice_id = 1;
+  int64 page = 2;
+}
+message GetNoticeAggListResponse{
+  repeated NoticeAggBody notices = 1;
+  bool has_more = 2;
+  common.BaseResp baseResp = 255;
+}
+message GetNoticeCountRequest{
+  int64 user_id = 1;
+  int32 group = 2;
+}
+message GetNoticeCountResponse{
+  int64 notice_count = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message MarkNoticeReadRequest{
+  int64 user_id = 1;
+  int32 group = 2;
+}
+message MarkNoticeReadResponse{
+  common.BaseResp baseResp = 255;
+}
+
+service IMService{
+  rpc SendMessage(SendMessageRequest)returns(SendMessageResponse);
+  rpc GetMessageByUser(GetMessageByUserRequest)returns(GetMessageByUserResponse);
+  rpc GetCommandByUser(GetCommandByUserRequest)returns(GetCommandByUserResponse);
+  rpc GetMessageByConversation(GetMessageByConversationRequest)returns(GetMessageByConversationResponse);
+  rpc MarkRead(MarkReadRequest)returns(MarkReadResponse);
+  rpc CreateConversation(CreateConversationRequest)returns(CreateConversationResponse);
+  rpc GetConversationInfo(GetConversationInfoRequest)returns(GetConversationInfoResponse);
+  rpc AddConversationMembers(AddConversationMembersRequest)returns(AddConversationMembersResponse);
+  rpc GetConversationMembers(GetConversationMembersRequest)returns(GetConversationMembersResponse);
+  rpc GetMembersReadIndex(GetMembersReadIndexRequest)returns(GetMembersReadIndexResponse);
+  rpc GetConversationAgents(GetConversationAgentsRequest)returns(GetConversationAgentsResponse);
+  rpc SendNotice(SendNoticeRequest)returns(SendNoticeResponse);
+  rpc GetNoticeList(GetNoticeListRequest)returns(GetNoticeListResponse);
+  rpc GetNoticeAggList(GetNoticeAggListRequest)returns(GetNoticeAggListResponse);
+  rpc GetNoticeCount(GetNoticeCountRequest)returns(GetNoticeCountResponse);
+  rpc MarkNoticeRead(MarkNoticeReadRequest)returns(MarkNoticeReadResponse);
+}

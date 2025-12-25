@@ -1,0 +1,31 @@
+syntax = "proto3";
+package common;
+option java_multiple_files = true;
+option java_package = "violet.gateway.common.proto_gen.common";
+option go_package = "im/proto_gen/common";
+
+enum StatusCode{
+  StatusCode_Not_Use = 0;
+  Success = 1000;
+  Server_Error = 1001;
+  Param_Error = 1002;
+  OverFrequency_Error = 1003;
+  OverLimit_Error = 1004;
+  Duplicate_Error = 1005;
+  RetryTime_Error = 1006;
+  Not_Found_Error = 1007;
+  Unknown_Error = 9999;
+}
+message BaseResp{
+  StatusCode StatusCode = 1;
+  string StatusMessage = 2;
+}
+
+enum SpecialUser{
+  SpecialUser_Not_Use = 0;
+  System = 1;
+  Action = 2;
+  Market = 3;
+  AI = 4;
+  Conversation = 5;
+}

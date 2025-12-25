@@ -1,0 +1,8 @@
+.idea
+.venv
+.python-version
+.env
+*.egg-info/
+/src/chatbot/proto_gen/
+*.deb
+__pycache__/
