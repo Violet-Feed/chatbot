@@ -166,20 +166,24 @@ class SendScheduler:
         con_id = str(task.get("con_id", "") or "")
         con_type = int(task.get("con_type", 2) or 2)
 
-        user_id = int(task.get("agent_id", 0) or 0)
+        sender_id = int(task.get("sender_id", 0) or task.get("agent_id", 0) or 0)
+        sender_type = int(task.get("sender_type", 0) or 0)
+        if sender_type == 0:
+            sender_type = 3
         msg_type = int(task.get("msg_type", 1) or 1)
         msg_content = str(task.get("msg_content", "") or "")
 
-        if con_short_id <= 0 or user_id <= 0 or not msg_content:
+        if con_short_id <= 0 or sender_id <= 0 or not msg_content:
             raise ValueError(
-                f"invalid task: con_short_id={con_short_id}, user_id={user_id}, content_empty={not msg_content}"
+                f"invalid task: con_short_id={con_short_id}, sender_id={sender_id}, content_empty={not msg_content}"
             )
 
         client_msg_id = task.get("client_msg_id")
         client_msg_id_int = int(client_msg_id) if client_msg_id is not None else None
 
         msg_id = await self.im.send_message(
-            user_id=user_id,
+            sender_id=sender_id,
+            sender_type=sender_type,
             con_short_id=con_short_id,
             con_id=con_id,
             con_type=con_type,
@@ -192,7 +196,7 @@ class SendScheduler:
             task.get("task_id"),
             msg_id,
             con_short_id,
-            user_id,
+            sender_id,
         )
 
     async def _retry(self, task: Dict[str, Any]) -> None:

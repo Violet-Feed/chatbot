@@ -45,7 +45,8 @@ class IMClient:
 
     async def send_message(
         self,
-        user_id: int,
+        sender_id: int,
+        sender_type: int,
         con_short_id: int,
         con_id: str,
         con_type: int,
@@ -58,7 +59,8 @@ class IMClient:
             client_msg_id = _new_client_msg_id()
 
         req = im_pb2.SendMessageRequest(
-            user_id=int(user_id),
+            sender_id=int(sender_id),
+            sender_type=int(sender_type),
             con_short_id=int(con_short_id),
             con_id=str(con_id),
             con_type=int(con_type),

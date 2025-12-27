@@ -31,11 +31,89 @@ class ReplyInputs:
     rolling_summary: str
     episodic_memory_json: str
     style_hint: str
+    glossary_json: str
+    web_context: str
     group_rules: str
+
+
+@dataclass(frozen=True)
+class DecisionInputs:
+    agents_json: str
+    recent_messages_json: str
+    last_message_json: str
+    bot_chain_depth: int
+    group_rules: str
+
+
+@dataclass(frozen=True)
+class DecisionOutput:
+    respond: bool
+    primary_agent_id: Optional[int]
+    secondary_agent_id: Optional[int]
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class StyleLearnInputs:
+    recent_messages: str
+
+
+@dataclass(frozen=True)
+class StyleLearnOutput:
+    style_rules: List[str]
+    hotwords: List[str]
+
+
+@dataclass(frozen=True)
+class SearchDecisionInputs:
+    recent_messages: str
+
+
+@dataclass(frozen=True)
+class SearchDecisionOutput:
+    need_search: bool
+    query: str
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class UnknownTermsInputs:
+    recent_messages: str
+    known_terms_json: str
+
+
+@dataclass(frozen=True)
+class UnknownTermsOutput:
+    terms: List[str]
+
+
+@dataclass(frozen=True)
+class TermMeaningInputs:
+    term: str
+    recent_messages: str
+    web_context: str
+
+
+@dataclass(frozen=True)
+class TermMeaningOutput:
+    meaning: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class ClarifyInputs:
+    terms: str
+    recent_messages: str
 
 
 class LLMClient(Protocol):
     async def generate_reply(self, inputs: ReplyInputs) -> str: ...
+    async def decide_reply(self, inputs: DecisionInputs) -> DecisionOutput: ...
+    async def learn_style(self, inputs: StyleLearnInputs) -> StyleLearnOutput: ...
+    async def decide_search(self, inputs: SearchDecisionInputs) -> SearchDecisionOutput: ...
+    async def extract_unknown_terms(self, inputs: UnknownTermsInputs) -> UnknownTermsOutput: ...
+    async def infer_term_meaning(self, inputs: TermMeaningInputs) -> TermMeaningOutput: ...
+    async def generate_clarify(self, inputs: ClarifyInputs) -> str: ...
     async def summarize(self, current_summary: str, new_messages: str) -> str: ...
     async def extract_episodic(self, messages_text: str) -> List[Dict[str, Any]]: ...
 
@@ -43,6 +121,24 @@ class LLMClient(Protocol):
 @dataclass(frozen=True)
 class NoopLLMClient:
     async def generate_reply(self, inputs: ReplyInputs) -> str:
+        return ""
+
+    async def decide_reply(self, inputs: DecisionInputs) -> DecisionOutput:
+        return DecisionOutput(respond=False, primary_agent_id=None, secondary_agent_id=None, reason="noop")
+
+    async def learn_style(self, inputs: StyleLearnInputs) -> StyleLearnOutput:
+        return StyleLearnOutput(style_rules=[], hotwords=[])
+
+    async def decide_search(self, inputs: SearchDecisionInputs) -> SearchDecisionOutput:
+        return SearchDecisionOutput(need_search=False, query="", reason="noop")
+
+    async def extract_unknown_terms(self, inputs: UnknownTermsInputs) -> UnknownTermsOutput:
+        return UnknownTermsOutput(terms=[])
+
+    async def infer_term_meaning(self, inputs: TermMeaningInputs) -> TermMeaningOutput:
+        return TermMeaningOutput(meaning="", confidence=0.0)
+
+    async def generate_clarify(self, inputs: ClarifyInputs) -> str:
         return ""
 
     async def summarize(self, current_summary: str, new_messages: str) -> str:
@@ -112,6 +208,25 @@ def _extract_json_array(text: str) -> Optional[str]:
     return s[l : r + 1]
 
 
+def _extract_json_object(text: str) -> Optional[str]:
+    """
+    允许模型偶发输出多余前后缀：尽量截取第一个 '{' 到最后一个 '}' 之间内容。
+    """
+    if not text:
+        return None
+    s = text.strip()
+
+    if s.startswith("```"):
+        s = s.strip("`")
+        s = s.replace("json", "", 1).strip()
+
+    l = s.find("{")
+    r = s.rfind("}")
+    if l == -1 or r == -1 or r <= l:
+        return None
+    return s[l : r + 1]
+
+
 class LangChainQwenOpenAICompatibleClient:
     """
     只使用 prompts.py 中的提示词：
@@ -122,6 +237,211 @@ class LangChainQwenOpenAICompatibleClient:
 
     def __init__(self, settings: Settings) -> None:
         self.s = settings
+
+    async def decide_reply(self, inputs: DecisionInputs) -> DecisionOutput:
+        chat = _new_chat(self.s, max_tokens=200, temperature=0.2)
+
+        sys = prompts.DECISION_SYSTEM
+        usr = _render(
+            prompts.DECISION_USER,
+            agents_json=inputs.agents_json or "[]",
+            recent_messages_json=inputs.recent_messages_json or "[]",
+            last_message_json=inputs.last_message_json or "{}",
+            bot_chain_depth=str(int(inputs.bot_chain_depth)),
+            group_rules=inputs.group_rules or "",
+        )
+
+        msg = await chat.ainvoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+        raw = (getattr(msg, "content", "") or "").strip()
+
+        payload = _extract_json_object(raw)
+        if not payload:
+            return DecisionOutput(respond=False, primary_agent_id=None, secondary_agent_id=None, reason="bad_json")
+
+        try:
+            obj = orjson.loads(payload)
+        except Exception:
+            return DecisionOutput(respond=False, primary_agent_id=None, secondary_agent_id=None, reason="bad_json")
+
+        if not isinstance(obj, dict):
+            return DecisionOutput(respond=False, primary_agent_id=None, secondary_agent_id=None, reason="bad_json")
+
+        respond = bool(obj.get("respond", False))
+        primary = obj.get("primary_agent_id")
+        secondary = obj.get("secondary_agent_id")
+        reason = str(obj.get("reason", "") or "")
+
+        try:
+            primary_id = int(primary) if primary is not None else None
+        except Exception:
+            primary_id = None
+
+        try:
+            secondary_id = int(secondary) if secondary is not None else None
+        except Exception:
+            secondary_id = None
+
+        return DecisionOutput(
+            respond=respond,
+            primary_agent_id=primary_id,
+            secondary_agent_id=secondary_id,
+            reason=reason,
+        )
+
+    async def learn_style(self, inputs: StyleLearnInputs) -> StyleLearnOutput:
+        chat = _new_chat(self.s, max_tokens=260, temperature=0.3)
+
+        sys = prompts.STYLE_SYSTEM
+        usr = _render(
+            prompts.STYLE_USER,
+            recent_messages=_clip(inputs.recent_messages or "", 9000),
+        )
+
+        msg = await chat.ainvoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+        raw = (getattr(msg, "content", "") or "").strip()
+
+        payload = _extract_json_object(raw)
+        if not payload:
+            return StyleLearnOutput(style_rules=[], hotwords=[])
+
+        try:
+            obj = orjson.loads(payload)
+        except Exception:
+            return StyleLearnOutput(style_rules=[], hotwords=[])
+
+        if not isinstance(obj, dict):
+            return StyleLearnOutput(style_rules=[], hotwords=[])
+
+        style_rules_raw = obj.get("style_rules") or []
+        hotwords_raw = obj.get("hotwords") or []
+
+        style_rules: List[str] = []
+        if isinstance(style_rules_raw, list):
+            for it in style_rules_raw:
+                s = str(it or "").strip()
+                if s:
+                    style_rules.append(s)
+
+        hotwords: List[str] = []
+        if isinstance(hotwords_raw, list):
+            for it in hotwords_raw:
+                s = str(it or "").strip()
+                if s:
+                    hotwords.append(s)
+
+        return StyleLearnOutput(style_rules=style_rules[:12], hotwords=hotwords[:30])
+
+    async def decide_search(self, inputs: SearchDecisionInputs) -> SearchDecisionOutput:
+        chat = _new_chat(self.s, max_tokens=120, temperature=0.2)
+
+        sys = prompts.SEARCH_DECISION_SYSTEM
+        usr = _render(prompts.SEARCH_DECISION_USER, recent_messages=_clip(inputs.recent_messages or "", 4000))
+
+        msg = await chat.ainvoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+        raw = (getattr(msg, "content", "") or "").strip()
+
+        payload = _extract_json_object(raw)
+        if not payload:
+            return SearchDecisionOutput(need_search=False, query="", reason="bad_json")
+
+        try:
+            obj = orjson.loads(payload)
+        except Exception:
+            return SearchDecisionOutput(need_search=False, query="", reason="bad_json")
+
+        if not isinstance(obj, dict):
+            return SearchDecisionOutput(need_search=False, query="", reason="bad_json")
+
+        need_search = bool(obj.get("need_search", False))
+        query = str(obj.get("query", "") or "").strip()
+        reason = str(obj.get("reason", "") or "")
+        if not need_search:
+            query = ""
+
+        return SearchDecisionOutput(need_search=need_search, query=query, reason=reason)
+
+    async def extract_unknown_terms(self, inputs: UnknownTermsInputs) -> UnknownTermsOutput:
+        chat = _new_chat(self.s, max_tokens=160, temperature=0.2)
+
+        sys = prompts.UNKNOWN_TERM_SYSTEM
+        usr = _render(
+            prompts.UNKNOWN_TERM_USER,
+            recent_messages=_clip(inputs.recent_messages or "", 6000),
+            known_terms_json=inputs.known_terms_json or "[]",
+        )
+
+        msg = await chat.ainvoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+        raw = (getattr(msg, "content", "") or "").strip()
+
+        payload = _extract_json_object(raw)
+        if not payload:
+            return UnknownTermsOutput(terms=[])
+
+        try:
+            obj = orjson.loads(payload)
+        except Exception:
+            return UnknownTermsOutput(terms=[])
+
+        if not isinstance(obj, dict):
+            return UnknownTermsOutput(terms=[])
+
+        terms_raw = obj.get("terms") or []
+        terms: List[str] = []
+        if isinstance(terms_raw, list):
+            for it in terms_raw:
+                s = str(it or "").strip()
+                if s:
+                    terms.append(s)
+
+        return UnknownTermsOutput(terms=terms[:6])
+
+    async def infer_term_meaning(self, inputs: TermMeaningInputs) -> TermMeaningOutput:
+        chat = _new_chat(self.s, max_tokens=200, temperature=0.3)
+
+        sys = prompts.TERM_MEANING_SYSTEM
+        usr = _render(
+            prompts.TERM_MEANING_USER,
+            term=inputs.term or "",
+            recent_messages=_clip(inputs.recent_messages or "", 4000),
+            web_context=_clip(inputs.web_context or "", 6000),
+        )
+
+        msg = await chat.ainvoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+        raw = (getattr(msg, "content", "") or "").strip()
+
+        payload = _extract_json_object(raw)
+        if not payload:
+            return TermMeaningOutput(meaning="", confidence=0.0)
+
+        try:
+            obj = orjson.loads(payload)
+        except Exception:
+            return TermMeaningOutput(meaning="", confidence=0.0)
+
+        if not isinstance(obj, dict):
+            return TermMeaningOutput(meaning="", confidence=0.0)
+
+        meaning = str(obj.get("meaning", "") or "").strip()
+        try:
+            confidence = float(obj.get("confidence", 0.0) or 0.0)
+        except Exception:
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+
+        return TermMeaningOutput(meaning=meaning, confidence=confidence)
+
+    async def generate_clarify(self, inputs: ClarifyInputs) -> str:
+        chat = _new_chat(self.s, max_tokens=120, temperature=0.4)
+
+        sys = prompts.CLARIFY_SYSTEM
+        usr = _render(
+            prompts.CLARIFY_USER,
+            terms=inputs.terms or "",
+            recent_messages=_clip(inputs.recent_messages or "", 2000),
+        )
+
+        msg = await chat.ainvoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+        return (getattr(msg, "content", "") or "").strip()
 
     async def generate_reply(self, inputs: ReplyInputs) -> str:
         max_tokens = 160 if inputs.rank == 1 else 96
@@ -139,6 +459,8 @@ class LangChainQwenOpenAICompatibleClient:
             rolling_summary=inputs.rolling_summary or "",
             episodic_memory=inputs.episodic_memory_json or "[]",
             style_hint=inputs.style_hint or "",
+            glossary_json=inputs.glossary_json or "[]",
+            web_context=inputs.web_context or "",
             group_rules=inputs.group_rules or "",
         )
 

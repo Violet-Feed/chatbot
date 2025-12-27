@@ -5,7 +5,7 @@ import logging
 import random
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, TypedDict
 
 from chatbot.dal.redis.service import RedisService
 from chatbot.proto_gen import im_pb2
@@ -14,11 +14,25 @@ from chatbot.utils.json import safe_obj_loads, json_dumps
 from chatbot.utils.time import now_ms
 
 from chatbot.memory.episodic import EpisodicEvent, extract_episodic_rule_based
-from chatbot.memory.style import compute_style_features, dumps_features
-from chatbot.memory.summary import RollingSummaryState, update_rolling_summary
-from chatbot.planner.decision import AgentView, decide_0_2_agents
-from chatbot.planner.llm import LLMClient, NoopLLMClient, ReplyInputs
+from chatbot.planner.llm import (
+    DecisionInputs,
+    DecisionOutput,
+    LLMClient,
+    NoopLLMClient,
+    ReplyInputs,
+    SearchDecisionInputs,
+    SearchDecisionOutput,
+    UnknownTermsInputs,
+    UnknownTermsOutput,
+    TermMeaningInputs,
+    TermMeaningOutput,
+    ClarifyInputs,
+    StyleLearnInputs,
+    StyleLearnOutput,
+)
 from chatbot.planner.quality import enforce_short, split_human_like, too_similar
+from chatbot.planner.triggers import mentioned_agent
+from chatbot.utils.web_search import search_jina
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +46,22 @@ class AgentProfile:
     avatar_uri: str = ""
     aliases: Sequence[str] = ()
     activeness: float = 0.5  # 0~1 越高越愿意说话
+
+
+class WindowGraphState(TypedDict, total=False):
+    g: int
+    win_id: str
+    items: List[Dict[str, Any]]
+    agents: List[AgentProfile]
+    chain_depth: int
+    token_taken: bool
+    rate_limited: bool
+    decision: DecisionOutput
+    scheduled_primary: bool
+    scheduled_secondary: bool
+    web_context: str
+    glossary_updates: List[Dict[str, Any]]
+    override_reply_text: str
 
 
 class Planner:
@@ -68,6 +98,8 @@ class Planner:
         self.llm: LLMClient = llm or NoopLLMClient()
         self.enable_memory = enable_memory
 
+        self._graph = self._build_graph()
+
     # -------------------------
     # MQ 入口：每条消息只做轻量操作
     # -------------------------
@@ -78,7 +110,7 @@ class Planner:
             return
 
         extra_obj = safe_obj_loads(m.extra)
-        is_bot = isinstance(extra_obj, dict) and ("bot_meta" in extra_obj)
+        is_bot = int(getattr(m, "sender_type", 0) or 0) == 3
 
         # 人类消息：重置 bot 链深，并取消第二条（严格“人类打断”）
         if not is_bot:
@@ -99,7 +131,8 @@ class Planner:
         item: Dict[str, Any] = {
             "con_index": int(m.con_index or evt.con_index or 0),
             "msg_id": int(m.msg_id or 0),
-            "sender_id": int(getattr(m, "sender_id", 0) or m.user_id or 0),  # 兼容你之后改 sender_id
+            "sender_id": int(getattr(m, "sender_id", 0) or 0),
+            "sender_type": int(getattr(m, "sender_type", 0) or 0),
             "is_bot": bool(is_bot),
             "msg_type": int(m.msg_type or 0),
             "msg_content": (m.msg_content or ""),
@@ -162,82 +195,289 @@ class Planner:
         if not items:
             await self.redis.clear_window(g, win_id)
             return
-
-        # 群级频控：拿不到 token 则本窗口不发言
-        if not await self.redis.bucket_take(g, cost=1):
-            await self._maybe_update_memory(g, items)
+        try:
+            await self._graph.ainvoke({"g": g, "win_id": win_id, "items": items})
+        except Exception:
+            logger.exception("langgraph window flow failed con=%s win=%s", g, win_id)
+        finally:
             await self.redis.clear_window(g, win_id)
-            return
 
+    # -------------------------
+    # LangGraph orchestration
+    # -------------------------
+    def _build_graph(self):
+        from langgraph.graph import StateGraph, END
+
+        graph = StateGraph(WindowGraphState)
+        graph.add_node("load_context", self._lg_load_context)
+        graph.add_node("rate_limit", self._lg_rate_limit)
+        graph.add_node("llm_decide", self._lg_llm_decide)
+        graph.add_node("resolve_search", self._lg_resolve_search)
+        graph.add_node("schedule_primary", self._lg_schedule_primary)
+        graph.add_node("schedule_secondary", self._lg_schedule_secondary)
+        graph.add_node("finalize", self._lg_finalize)
+        graph.add_node("memory_update", self._lg_memory_update)
+
+        graph.set_entry_point("load_context")
+        graph.add_edge("load_context", "rate_limit")
+        graph.add_edge("rate_limit", "llm_decide")
+        graph.add_edge("llm_decide", "resolve_search")
+        graph.add_edge("resolve_search", "schedule_primary")
+        graph.add_edge("schedule_primary", "schedule_secondary")
+        graph.add_edge("schedule_secondary", "finalize")
+        graph.add_edge("finalize", "memory_update")
+        graph.add_edge("memory_update", END)
+        return graph.compile()
+
+    async def _lg_load_context(self, state: WindowGraphState) -> WindowGraphState:
+        g = int(state["g"])
         agents = await self._load_agents_from_im(g)
-        if not agents:
-            await self._maybe_update_memory(g, items)
-            await self.redis.clear_window(g, win_id)
-            return
 
-        # 冷却过滤
         available: List[AgentProfile] = []
         for a in agents:
             if await self.redis.is_agent_in_cooldown(a.agent_id):
                 continue
             available.append(a)
 
-        if not available:
-            await self._maybe_update_memory(g, items)
-            await self.redis.clear_window(g, win_id)
-            return
+        chain_depth = await self.redis.get_bot_chain_depth(g)
+        return {"agents": available, "chain_depth": int(chain_depth)}
 
-        # ---- 纯决策：0~2 bot（不含 token/cooldown）----
-        views = [
-            AgentView(agent_id=a.agent_id, name=a.name, aliases=a.aliases, activeness=a.activeness)
-            for a in available
-        ]
-        d = decide_0_2_agents(views, items, bot2bot_strict=True)
-        if d.primary_id is None:
-            await self._maybe_update_memory(g, items)
-            await self.redis.clear_window(g, win_id)
-            return
+    async def _lg_rate_limit(self, state: WindowGraphState) -> WindowGraphState:
+        g = int(state["g"])
+        agents = state.get("agents") or []
+        if not agents:
+            return {"rate_limited": True, "token_taken": False}
 
-        primary = next((a for a in available if a.agent_id == d.primary_id), None)
-        secondary = next((a for a in available if a.agent_id == d.secondary_id), None) if d.secondary_id else None
-        if primary is None:
-            await self._maybe_update_memory(g, items)
-            await self.redis.clear_window(g, win_id)
-            return
+        ok = await self.redis.bucket_take(g, cost=1)
+        return {"rate_limited": not ok, "token_taken": bool(ok)}
 
-        # 主 bot：生成并入队
-        await self._schedule_reply(
-            g=g,
-            win_id=win_id,
+    async def _lg_llm_decide(self, state: WindowGraphState) -> WindowGraphState:
+        items = state.get("items") or []
+        agents = state.get("agents") or []
+        chain_depth = int(state.get("chain_depth") or 0)
+
+        if not items or not agents:
+            return {"decision": DecisionOutput(False, None, None, "no_items_or_agents")}
+        if state.get("rate_limited"):
+            return {"decision": DecisionOutput(False, None, None, "rate_limited")}
+        if chain_depth >= 2:
+            return {"decision": DecisionOutput(False, None, None, "bot_chain_depth")}
+        if isinstance(self.llm, NoopLLMClient):
+            return {"decision": DecisionOutput(False, None, None, "noop_llm")}
+
+        agents_payload = []
+        for a in agents:
+            agents_payload.append(
+                {
+                    "agent_id": a.agent_id,
+                    "name": a.name,
+                    "aliases": list(a.aliases),
+                    "personality": a.personality,
+                    "description": a.description,
+                    "activeness": a.activeness,
+                }
+            )
+
+        msgs_payload = self._decision_messages_payload(items)
+        inputs = DecisionInputs(
+            agents_json=json_dumps(agents_payload),
+            recent_messages_json=msgs_payload["recent_messages_json"],
+            last_message_json=msgs_payload["last_message_json"],
+            bot_chain_depth=chain_depth,
+            group_rules="",
+        )
+
+        decision = await self.llm.decide_reply(inputs)
+        decision = self._sanitize_decision(decision, agents, items)
+        return {"decision": decision}
+
+    async def _lg_resolve_search(self, state: WindowGraphState) -> WindowGraphState:
+        decision = state.get("decision")
+        if not decision or not decision.respond:
+            return {}
+        if isinstance(self.llm, NoopLLMClient):
+            return {}
+
+        items = state.get("items") or []
+        recent_text = self._format_recent(items[-30:])
+        web_contexts: List[str] = []
+        glossary_updates: List[Dict[str, Any]] = []
+
+        search_decision: SearchDecisionOutput = await self.llm.decide_search(
+            SearchDecisionInputs(recent_messages=recent_text)
+        )
+        if search_decision.need_search and search_decision.query:
+            res = await self._web_search(search_decision.query)
+            if res:
+                web_contexts.append(f"[search:{search_decision.query}]\n{res}")
+
+        known_terms = await self._load_known_terms(int(state["g"]))
+        unknown_terms: UnknownTermsOutput = await self.llm.extract_unknown_terms(
+            UnknownTermsInputs(recent_messages=recent_text, known_terms_json=json_dumps(known_terms))
+        )
+
+        unresolved: List[str] = []
+        for term in unknown_terms.terms[:2]:
+            web = await self._web_search(term) or ""
+            if web:
+                web_contexts.append(f"[term:{term}]\n{web}")
+
+            meaning: TermMeaningOutput = await self.llm.infer_term_meaning(
+                TermMeaningInputs(term=term, recent_messages=recent_text, web_context=web)
+            )
+            if meaning.meaning and meaning.confidence >= 0.4:
+                glossary_updates.append(
+                    {
+                        "term": term,
+                        "meaning": meaning.meaning,
+                        "source": "search" if web else "context",
+                    }
+                )
+            else:
+                unresolved.append(term)
+
+        override_reply_text = ""
+        if unresolved:
+            question = await self.llm.generate_clarify(
+                ClarifyInputs(terms="，".join(unresolved), recent_messages=recent_text)
+            )
+            override_reply_text = question.strip()
+
+        web_context = "\n\n".join(web_contexts)
+        if len(web_context) > 6000:
+            web_context = web_context[:6000] + "..."
+
+        return {
+            "web_context": web_context,
+            "glossary_updates": glossary_updates,
+            "override_reply_text": override_reply_text,
+        }
+
+    async def _lg_schedule_primary(self, state: WindowGraphState) -> WindowGraphState:
+        decision = state.get("decision")
+        agents = state.get("agents") or []
+        items = state.get("items") or []
+        if not decision or not decision.respond or decision.primary_agent_id is None:
+            return {"scheduled_primary": False}
+
+        primary = next((a for a in agents if a.agent_id == decision.primary_agent_id), None)
+        if not primary:
+            return {"scheduled_primary": False}
+
+        scheduled = await self._schedule_reply(
+            g=int(state["g"]),
+            win_id=str(state["win_id"]),
             agent=primary,
             rank=1,
-            trigger_reason=d.reason1 or "STRONG",
+            trigger_reason=decision.reason or "LLM",
             window_items=items,
+            web_context=str(state.get("web_context") or ""),
+            glossary_updates=state.get("glossary_updates") or [],
+            forced_text=str(state.get("override_reply_text") or "").strip() or None,
         )
-        await self.redis.set_bot_chain_depth(g, 1)
+        return {"scheduled_primary": bool(scheduled)}
 
-        # 第二 bot：严格门控 + 间隔
-        if secondary is not None:
-            allow_second = True
+    async def _lg_schedule_secondary(self, state: WindowGraphState) -> WindowGraphState:
+        decision = state.get("decision")
+        if not decision or decision.secondary_agent_id is None:
+            return {"scheduled_secondary": False}
 
-            # bot↔bot 严格：只在“最后一条是 bot 且决策原因是 BOT2BOT_STRICT”时消耗 token
-            if d.reason2 == "BOT2BOT_STRICT":
-                allow_second = await self.redis.take_bot2bot_token(g)
+        if not state.get("scheduled_primary"):
+            return {"scheduled_secondary": False}
 
-            if allow_second:
-                await self._schedule_reply(
-                    g=g,
-                    win_id=win_id,
-                    agent=secondary,
-                    rank=2,
-                    trigger_reason=d.reason2 or "STRONG",
-                    window_items=items,
+        agents = state.get("agents") or []
+        items = state.get("items") or []
+        secondary = next((a for a in agents if a.agent_id == decision.secondary_agent_id), None)
+        if not secondary:
+            return {"scheduled_secondary": False}
+
+        last = items[-1] if items else {}
+        if bool(last.get("is_bot")):
+            if not await self.redis.take_bot2bot_token(int(state["g"])):
+                return {"scheduled_secondary": False}
+
+        scheduled = await self._schedule_reply(
+            g=int(state["g"]),
+            win_id=str(state["win_id"]),
+            agent=secondary,
+            rank=2,
+            trigger_reason=decision.reason or "LLM_SECOND",
+            window_items=items,
+            web_context=str(state.get("web_context") or ""),
+            glossary_updates=state.get("glossary_updates") or [],
+        )
+        return {"scheduled_secondary": bool(scheduled)}
+
+    async def _lg_finalize(self, state: WindowGraphState) -> WindowGraphState:
+        g = int(state["g"])
+        if state.get("token_taken") and not state.get("scheduled_primary"):
+            await self.redis.bucket_refund(g, cost=1)
+
+        if state.get("scheduled_primary"):
+            depth = 2 if state.get("scheduled_secondary") else 1
+            await self.redis.set_bot_chain_depth(g, depth)
+
+        return {}
+
+    async def _lg_memory_update(self, state: WindowGraphState) -> WindowGraphState:
+        items = state.get("items") or []
+        await self._maybe_update_memory(int(state["g"]), items)
+        if state.get("glossary_updates"):
+            try:
+                await self.style_svc.merge_update(
+                    int(state["g"]),
+                    {"glossary": state.get("glossary_updates")},
                 )
+            except Exception:
+                logger.exception("save glossary update failed con=%s", state.get("g"))
+        return {}
 
-        # 可选：记忆更新（摘要/事件/风格）
-        await self._maybe_update_memory(g, items)
+    def _decision_messages_payload(self, items: List[Dict[str, Any]]) -> Dict[str, str]:
+        payload: List[Dict[str, Any]] = []
+        for it in items[-50:]:
+            mentions = (it.get("extra") or {}).get("mentions") or []
+            payload.append(
+                {
+                    "sender_id": int(it.get("sender_id", 0) or 0),
+                    "is_bot": bool(it.get("is_bot", False)),
+                    "msg_type": int(it.get("msg_type", 0) or 0),
+                    "msg_content": str(it.get("msg_content", "") or "")[:300],
+                    "mentions": mentions,
+                }
+            )
+        last = payload[-1] if payload else {}
+        return {
+            "recent_messages_json": json_dumps(payload),
+            "last_message_json": json_dumps(last),
+        }
 
-        await self.redis.clear_window(g, win_id)
+    def _sanitize_decision(
+        self,
+        decision: DecisionOutput,
+        agents: List[AgentProfile],
+        items: List[Dict[str, Any]],
+    ) -> DecisionOutput:
+        if not decision.respond or decision.primary_agent_id is None:
+            return DecisionOutput(False, None, None, decision.reason)
+
+        ids = {a.agent_id for a in agents}
+        if decision.primary_agent_id not in ids:
+            return DecisionOutput(False, None, None, "invalid_primary")
+
+        secondary = decision.secondary_agent_id
+        if secondary is not None:
+            if secondary == decision.primary_agent_id or secondary not in ids:
+                secondary = None
+
+        last = items[-1] if items else {}
+        last_mentions = (last.get("extra") or {}).get("mentions") or []
+        if bool(last.get("is_bot")):
+            if not mentioned_agent(decision.primary_agent_id, last_mentions):
+                return DecisionOutput(False, None, None, "bot_last_no_mention")
+            if secondary is not None and (not mentioned_agent(secondary, last_mentions)):
+                secondary = None
+
+        return DecisionOutput(True, decision.primary_agent_id, secondary, decision.reason)
 
     async def _load_agents_from_im(self, con_short_id: int) -> List[AgentProfile]:
         """
@@ -297,124 +537,144 @@ class Planner:
         rank: int,
         trigger_reason: str,
         window_items: List[Dict[str, Any]],
-    ) -> None:
-        # 未接 LLM：保持克制，不发（系统稳定优先）
-        if isinstance(self.llm, NoopLLMClient):
-            return
-
-        strict = rank == 2
-
-        recent = self._format_recent(window_items[-30:])
-
-        # memory load：失败也不阻断主链路
-        rolling_summary = ""
-        episodic: List[Dict[str, Any]] = []
-        style: Dict[str, Any] = {}
+        web_context: str = "",
+        glossary_updates: Optional[List[Dict[str, Any]]] = None,
+        forced_text: Optional[str] = None,
+    ) -> bool:
         try:
-            rolling_summary, _last_idx = await self.summary_svc.load(g)
-        except Exception:
-            logger.exception("load rolling summary failed con=%s", g)
+            # 未接 LLM：保持克制，不发（系统稳定优先）
+            if isinstance(self.llm, NoopLLMClient):
+                return False
 
-        try:
-            episodic = await self.episodic_svc.load_active(g, now_ms())
-        except Exception:
-            logger.exception("load episodic memory failed con=%s", g)
+            strict = rank == 2
+            recent = self._format_recent(window_items[-30:])
 
-        try:
-            style = await self.style_svc.load(g)
-        except Exception:
-            logger.exception("load style fingerprint failed con=%s", g)
+            # memory load：失败也不阻断主链路
+            rolling_summary = ""
+            episodic: List[Dict[str, Any]] = []
+            style: Dict[str, Any] = {}
+            try:
+                rolling_summary, _last_idx = await self.summary_svc.load(g)
+            except Exception:
+                logger.exception("load rolling summary failed con=%s", g)
 
-        inputs = ReplyInputs(
-            personality=agent.personality or "",
-            intent="补一句" if strict else "自然回应并参与",
-            trigger_reason=trigger_reason,
-            recent_messages=recent,
-            rolling_summary=rolling_summary or "",
-            episodic_memory=json_dumps(episodic) if episodic else "[]",
-            style_hint=json_dumps(style) if style else "",
-            group_rules="",
-        )
+            try:
+                episodic = await self.episodic_svc.load_active(g, now_ms())
+            except Exception:
+                logger.exception("load episodic memory failed con=%s", g)
 
-        raw = (await self.llm.generate_reply(inputs)).strip()
-        if not raw:
-            return
+            try:
+                style = await self.style_svc.load(g)
+            except Exception:
+                logger.exception("load style fingerprint failed con=%s", g)
 
-        # 质量闸门：长度 + 复读
-        text = enforce_short(raw, strict=strict)
-        if not text:
-            return
+            glossary_json = self._merge_glossary_for_prompt(style, glossary_updates)
 
-        recent_bot_texts = [str(it.get("msg_content", "") or "") for it in window_items if it.get("is_bot")]
-        if too_similar(text, recent_bot_texts, threshold=0.75):
-            return
+            if forced_text:
+                raw = forced_text.strip()
+            else:
+                inputs = ReplyInputs(
+                    agent_id=agent.agent_id,
+                    agent_name=agent.name,
+                    agent_personality=agent.personality or "",
+                    agent_description=agent.description or "",
+                    rank=rank,
+                    trigger_reason=trigger_reason,
+                    intent="补一句" if strict else "自然回应并参与",
+                    recent_messages=recent,
+                    rolling_summary=rolling_summary or "",
+                    episodic_memory_json=json_dumps(episodic) if episodic else "[]",
+                    style_hint=json_dumps(style) if style else "",
+                    glossary_json=glossary_json,
+                    web_context=web_context or "",
+                    group_rules="",
+                )
 
-        # 拟人分句：多条短消息
-        segments = split_human_like(text, max_segments=3)
-        if not segments:
-            return
+                raw = (await self.llm.generate_reply(inputs)).strip()
+                if not raw:
+                    return False
 
-        # 模拟输入延迟 + 第二条严格间隔
-        base_delay = min(6000, 800 + len(segments[0]) * 35 + random.randint(0, 900))
-        send_ts = now_ms() + base_delay
-        if strict:
-            gap = random.randint(self.s.SECOND_GAP_MIN_MS, self.s.SECOND_GAP_MAX_MS)
-            send_ts = max(send_ts, now_ms() + gap)
+            # 质量闸门：长度 + 复读
+            text = enforce_short(raw, strict=strict)
+            if not text:
+                return False
 
-        # 会话信息：从窗口最后一条带过来
-        last = window_items[-1]
-        con_id = str(last.get("con_id", "") or "")
-        con_type = int(last.get("con_type", 2) or 2)
+            recent_bot_texts = [str(it.get("msg_content", "") or "") for it in window_items if it.get("is_bot")]
+            if too_similar(text, recent_bot_texts, threshold=0.75):
+                return False
 
-        first_task_id: Optional[str] = None
+            # 拟人分句：多条短消息
+            segments = split_human_like(text, max_segments=3)
+            if not segments:
+                return False
 
-        for idx, seg in enumerate(segments):
-            task_id = uuid.uuid4().hex
-            if idx == 0 and strict:
-                first_task_id = task_id
+            # 模拟输入延迟 + 第二条严格间隔
+            base_delay = min(6000, 800 + len(segments[0]) * 35 + random.randint(0, 900))
+            send_ts = now_ms() + base_delay
+            if strict:
+                gap = random.randint(self.s.SECOND_GAP_MIN_MS, self.s.SECOND_GAP_MAX_MS)
+                send_ts = max(send_ts, now_ms() + gap)
 
-            extra_obj = {
-                "bot_meta": {
-                    "trace_id": uuid.uuid4().hex,
-                    "window_id": win_id,
-                    "rank": rank,
-                    "strict": strict,
-                    "trigger": trigger_reason,
-                    "agent_id": agent.agent_id,
+            # 会话信息：从窗口最后一条带过来
+            last = window_items[-1]
+            con_id = str(last.get("con_id", "") or "")
+            con_type = int(last.get("con_type", 2) or 2)
+
+            first_task_id: Optional[str] = None
+
+            for idx, seg in enumerate(segments):
+                task_id = uuid.uuid4().hex
+                if idx == 0 and strict:
+                    first_task_id = task_id
+
+                extra_obj = {
+                    "bot_meta": {
+                        "trace_id": uuid.uuid4().hex,
+                        "window_id": win_id,
+                        "rank": rank,
+                        "strict": strict,
+                        "trigger": trigger_reason,
+                        "agent_id": agent.agent_id,
+                    }
                 }
-            }
 
-            task = {
-                "task_id": task_id,
-                "con_short_id": g,
-                "con_id": con_id,
-                "con_type": con_type,
-                "agent_id": agent.agent_id,
-                "rank": rank,
-                "send_ts_ms": int(send_ts),
-                "msg_type": 1,
-                "msg_content": seg,
-                "client_msg_id": uuid.uuid4().int & 0x7FFF_FFFF_FFFF_FFFF,
-                "extra": json_dumps(extra_obj),
-                "retry_count": 0,
-            }
+                task = {
+                    "task_id": task_id,
+                    "con_short_id": g,
+                    "con_id": con_id,
+                    "con_type": con_type,
+                    "sender_id": agent.agent_id,
+                    "sender_type": 3,
+                    "rank": rank,
+                    "send_ts_ms": int(send_ts),
+                    "msg_type": 1,
+                    "msg_content": seg,
+                    "client_msg_id": uuid.uuid4().int & 0x7FFF_FFFF_FFFF_FFFF,
+                    "extra": json_dumps(extra_obj),
+                    "retry_count": 0,
+                }
 
-            await self.redis.enqueue_send_task(json_dumps(task), int(send_ts))
+                await self.redis.enqueue_send_task(json_dumps(task), int(send_ts))
 
-            # 分段之间加一点“打字停顿”
-            send_ts += random.randint(1200, 2500)
+                # 分段之间加一点“打字停顿”
+                send_ts += random.randint(1200, 2500)
 
-        # 冷却：避免打扰（按 activeness 偏置）
-        cooldown_ms = self._cooldown_ms(agent=agent, strict=strict)
-        await self.redis.set_agent_cooldown_until(
-            agent_id=agent.agent_id,
-            until_ms=int(send_ts + cooldown_ms),
-            ttl_ms=int(cooldown_ms + 30_000),
-        )
+            # 冷却：避免打扰（按 activeness 偏置）
+            cooldown_ms = self._cooldown_ms(agent=agent, strict=strict)
+            await self.redis.set_agent_cooldown_until(
+                agent_id=agent.agent_id,
+                until_ms=int(send_ts + cooldown_ms),
+                ttl_ms=int(cooldown_ms + 30_000),
+            )
 
-        # 第二条允许被人类打断取消：只记录“第二 bot 的第一段”
-        if first_task_id:
-            await self.redis.set_pending_second(win_id, first_task_id)
+            # 第二条允许被人类打断取消：只记录“第二 bot 的第一段”
+            if first_task_id:
+                await self.redis.set_pending_second(win_id, first_task_id)
+
+            return True
+        except Exception:
+            logger.exception("schedule reply failed con=%s agent=%s", g, agent.agent_id)
+            return False
 
     # -------------------------
     # 记忆更新（可选）
@@ -424,15 +684,15 @@ class Planner:
             return
 
         try:
-            # 1) 风格指纹：轻量统计（建议总是更新）
-            features = compute_style_features(window_items)
-            if features:
-                try:
-                    await self.style_svc.upsert(g, dumps_features(features))
-                except Exception:
-                    logger.exception("save style fingerprint failed con=%s", g)
+            # 1) 风格指纹：LLM 学习语言风格与热词（每窗口）
+            try:
+                style_update = await self._learn_style(window_items)
+                if style_update:
+                    await self.style_svc.merge_update(g, style_update)
+            except Exception:
+                logger.exception("save style fingerprint failed con=%s", g)
 
-            # 2) 事件记忆：规则抽取为主；若 llm 提供 extract_episodic/summarize 再升级
+            # 2) 事件记忆：优先 LLM，失败则回退规则抽取
             events: List[EpisodicEvent] = []
 
             # 优先：如果 llm 有 extract_episodic 方法就用，否则走规则
@@ -486,37 +746,40 @@ class Planner:
                             ttl_ms=e.ttl_ms,
                         )
 
-            # 3) 滚动摘要：触发式（新增消息到一定量再更新）
+            # 3) 滚动摘要：每窗口都更新（LLM 可用时）
             try:
                 cur_summary, last_idx = await self.summary_svc.load(g)
-
                 summarize_fn = getattr(self.llm, "summarize", None)
+                new_msgs_text = self._format_recent(window_items[-200:])
+                new_summary = cur_summary or ""
+                if (not isinstance(self.llm, NoopLLMClient)) and callable(summarize_fn):
+                    new_summary = await summarize_fn(cur_summary or "", new_msgs_text)  # type: ignore[misc]
 
-                async def _llm_summarize(cur: str, new_msgs: str) -> str:
-                    if callable(summarize_fn):
-                        return await summarize_fn(cur, new_msgs)  # type: ignore[misc]
-                    return cur
-
-                state0 = RollingSummaryState(
-                    summary=cur_summary or "",
-                    last_con_index=int(last_idx or 0),
-                    updated_at_ms=now_ms(),
-                )
-                state1 = await update_rolling_summary(
-                    window_items=window_items,
-                    current_state=state0,
-                    llm_summarize=None if (isinstance(self.llm, NoopLLMClient) or not callable(summarize_fn)) else _llm_summarize,
-                    min_new_msgs=20,
-                )
-                if (state1.summary != state0.summary) or (state1.last_con_index != state0.last_con_index):
-                    await self.summary_svc.upsert(g, state1.summary, state1.last_con_index)
-
+                new_last_idx = max(int(it.get("con_index", 0) or 0) for it in window_items)
+                if (new_summary != cur_summary) or (int(last_idx or 0) != new_last_idx):
+                    await self.summary_svc.upsert(g, new_summary, new_last_idx)
             except Exception:
                 logger.exception("rolling summary update failed con=%s", g)
 
         except Exception:
             # 记忆更新不影响主链路（绝不让它打断发言流程）
             logger.exception("memory update failed con=%s", g)
+
+    async def _learn_style(self, window_items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if isinstance(self.llm, NoopLLMClient):
+            return {}
+
+        text = self._format_style_messages(window_items)
+        if not text:
+            return {}
+
+        out: StyleLearnOutput = await self.llm.learn_style(StyleLearnInputs(recent_messages=text))
+        style_rules = [s for s in out.style_rules if s]
+        hotwords = [s for s in out.hotwords if s]
+        if not style_rules and not hotwords:
+            return {}
+
+        return {"style_rules": style_rules, "hotwords": hotwords}
 
     # -------------------------
     # 工具函数
@@ -530,6 +793,81 @@ class Planner:
             if txt:
                 lines.append(f"[{who}:{sid}] {txt}")
         return "\n".join(lines)
+
+    def _format_style_messages(self, items: List[Dict[str, Any]]) -> str:
+        lines: List[str] = []
+        idx = 1
+        for it in items:
+            if it.get("is_bot"):
+                continue
+            txt = (it.get("msg_content") or "").replace("\n", " ").strip()
+            if not txt:
+                continue
+            lines.append(f"[{idx}] {txt}")
+            idx += 1
+            if idx > 120:
+                break
+        return "\n".join(lines)
+
+    def _merge_glossary_for_prompt(
+        self,
+        style: Dict[str, Any],
+        glossary_updates: Optional[List[Dict[str, Any]]],
+    ) -> str:
+        base = style.get("glossary") if isinstance(style, dict) else []
+        base_list = base if isinstance(base, list) else []
+        updates = glossary_updates or []
+
+        merged: List[Dict[str, Any]] = []
+        seen = set()
+        for it in updates + base_list:
+            if not isinstance(it, dict):
+                continue
+            term = str(it.get("term", "") or "").strip()
+            meaning = str(it.get("meaning", "") or "").strip()
+            if not term or not meaning:
+                continue
+            key = term.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append({"term": term, "meaning": meaning})
+            if len(merged) >= 20:
+                break
+        return json_dumps(merged)
+
+    async def _web_search(self, query: str) -> str:
+        res = await search_jina(
+            query=query,
+            base_url=self.s.JINA_SEARCH_BASE_URL,
+            api_key=self.s.JINA_API_KEY,
+            timeout_sec=int(self.s.JINA_SEARCH_TIMEOUT_SEC),
+        )
+        return res or ""
+
+    async def _load_known_terms(self, con_short_id: int) -> List[str]:
+        try:
+            style = await self.style_svc.load(con_short_id)
+        except Exception:
+            return []
+
+        terms: List[str] = []
+        if isinstance(style, dict):
+            hotwords = style.get("hotwords") or []
+            glossary = style.get("glossary") or []
+            if isinstance(hotwords, list):
+                for it in hotwords:
+                    s = str(it or "").strip()
+                    if s:
+                        terms.append(s)
+            if isinstance(glossary, list):
+                for it in glossary:
+                    if not isinstance(it, dict):
+                        continue
+                    s = str(it.get("term", "") or "").strip()
+                    if s:
+                        terms.append(s)
+        return terms
 
     def _cooldown_ms(self, agent: AgentProfile, strict: bool) -> int:
         base = random.randint(40_000, 120_000)

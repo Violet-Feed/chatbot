@@ -1,6 +1,7 @@
 # src/chatbot/dal/mysql/memory_service.py
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Tuple
 
 from sqlalchemy import delete, select
@@ -187,7 +188,7 @@ class StyleService:
             row = await ses.get(ConversationStyleFingerprint, con_short_id)
             if not row:
                 return {}
-            return {"features": row.features, "updated_at": int(row.updated_at)}
+            return self._parse_features(row.features, int(row.updated_at))
 
     async def upsert(self, con_short_id: int, features: str) -> None:
         """写入/更新风格指纹。"""
@@ -200,3 +201,131 @@ class StyleService:
                 row.features = features
                 row.updated_at = ts
             await ses.commit()
+
+    async def merge_update(
+        self,
+        con_short_id: int,
+        update: Dict[str, Any],
+        max_style_rules: int = 20,
+        max_hotwords: int = 50,
+        max_glossary: int = 50,
+    ) -> None:
+        """合并更新风格规则与热词（去重、保留最新）。"""
+        ts = now_ms()
+        async with self._sf() as ses:
+            row = await ses.get(ConversationStyleFingerprint, con_short_id)
+
+            base = {}
+            if row and row.features:
+                base = self._parse_features(row.features, int(row.updated_at or ts))
+
+            merged = self._merge_features(
+                base,
+                update,
+                max_style_rules=max_style_rules,
+                max_hotwords=max_hotwords,
+                max_glossary=max_glossary,
+            )
+
+            if not row:
+                ses.add(
+                    ConversationStyleFingerprint(
+                        con_short_id=con_short_id,
+                        features=json.dumps(merged, ensure_ascii=False, separators=(",", ":")),
+                        updated_at=ts,
+                    )
+                )
+            else:
+                row.features = json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
+                row.updated_at = ts
+            await ses.commit()
+
+    def _parse_features(self, raw: str, updated_at: int) -> Dict[str, Any]:
+        try:
+            obj = json.loads(raw or "{}")
+        except Exception:
+            obj = {}
+        if not isinstance(obj, dict):
+            obj = {}
+
+        style_rules = obj.get("style_rules")
+        hotwords = obj.get("hotwords")
+        glossary = obj.get("glossary")
+
+        return {
+            "style_rules": style_rules if isinstance(style_rules, list) else [],
+            "hotwords": hotwords if isinstance(hotwords, list) else [],
+            "glossary": glossary if isinstance(glossary, list) else [],
+            "updated_at": int(updated_at),
+        }
+
+    def _merge_features(
+        self,
+        base: Dict[str, Any],
+        update: Dict[str, Any],
+        max_style_rules: int,
+        max_hotwords: int,
+        max_glossary: int,
+    ) -> Dict[str, Any]:
+        def _norm(s: str) -> str:
+            return str(s or "").strip().casefold()
+
+        base_rules = [str(x).strip() for x in (base.get("style_rules") or []) if str(x).strip()]
+        new_rules = [str(x).strip() for x in (update.get("style_rules") or []) if str(x).strip()]
+
+        rule_seen = set()
+        merged_rules: List[str] = []
+        for s in new_rules + base_rules:
+            key = _norm(s)
+            if not key or key in rule_seen:
+                continue
+            rule_seen.add(key)
+            merged_rules.append(s)
+            if len(merged_rules) >= max_style_rules:
+                break
+
+        base_hot = [str(x).strip() for x in (base.get("hotwords") or []) if str(x).strip()]
+        new_hot = [str(x).strip() for x in (update.get("hotwords") or []) if str(x).strip()]
+
+        hot_seen = set()
+        merged_hot: List[str] = []
+        for s in new_hot + base_hot:
+            key = _norm(s)
+            if not key or key in hot_seen:
+                continue
+            hot_seen.add(key)
+            merged_hot.append(s)
+            if len(merged_hot) >= max_hotwords:
+                break
+
+        base_glossary = base.get("glossary") or []
+        new_glossary = update.get("glossary") or []
+        merged_glossary: List[Dict[str, Any]] = []
+        glossary_seen = set()
+        for it in (new_glossary + base_glossary):
+            if not isinstance(it, dict):
+                continue
+            term = str(it.get("term", "") or "").strip()
+            meaning = str(it.get("meaning", "") or "").strip()
+            if not term or not meaning:
+                continue
+            key = _norm(term)
+            if key in glossary_seen:
+                continue
+            glossary_seen.add(key)
+            merged_glossary.append(
+                {
+                    "term": term,
+                    "meaning": meaning,
+                    "source": str(it.get("source", "") or "").strip(),
+                }
+            )
+            if len(merged_glossary) >= max_glossary:
+                break
+
+        return {
+            "style_rules": merged_rules,
+            "hotwords": merged_hot,
+            "glossary": merged_glossary,
+            "updated_at": int(now_ms()),
+        }

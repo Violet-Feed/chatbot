@@ -44,9 +44,8 @@ def _parse_extra(x: Any) -> str:
 def parse_message_event_json(raw: bytes) -> im_pb2.MessageEvent:
     """
     MQ body 是 JSON；构造 proto MessageEvent 并返回。
-    兼容两种 sender 字段：
-    - 新：sender_id + sender_type
-    - 旧：user_id -> sender_id, sender_type=User
+    sender 字段：
+    - sender_id + sender_type
     """
     obj = orjson.loads(raw)
     if not isinstance(obj, dict):
@@ -56,20 +55,15 @@ def parse_message_event_json(raw: bytes) -> im_pb2.MessageEvent:
     if not isinstance(body, dict):
         raise ValueError("msg_body must be an object")
 
-    # sender 兼容
-    sender_id = body.get("sender_id")
-    sender_type = body.get("sender_type")
-    if sender_id is None:
-        sender_id = body.get("user_id", 0)
-        sender_type = 1  # user (约定：1 user, 2 agent, 3 system；按你最终 enum 映射调整)
+    sender_id = int(body.get("sender_id", 0) or 0)
+    sender_type = int(body.get("sender_type", 0) or 0)
 
     # con_index 兼容（可能在外层/内层）
     con_index = body.get("con_index", obj.get("con_index", 0)) or 0
 
     msg_body = im_pb2.MessageBody(
-        # 注意：这里字段名必须与 proto 一致
-        # 你 proto 里仍是 user_id 时：先临时写 user_id，等你改 sender_id/sender_type 再改这里
-        user_id=int(sender_id or 0),  # 兼容阶段：用 user_id 先承载 sender_id
+        sender_id=sender_id,
+        sender_type=sender_type,
         con_id=str(body.get("con_id", "") or ""),
         con_short_id=int(body.get("con_short_id", 0) or 0),
         con_type=int(body.get("con_type", 2) or 2),

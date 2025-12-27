@@ -60,3 +60,8 @@ class Settings(BaseSettings):
     QWEN_MODEL: str = "qwen-plus"
     QWEN_TEMPERATURE: float = 0.7
     QWEN_TIMEOUT_SEC: int = 30
+
+    # --- Jina Search ---
+    JINA_API_KEY: str = ""
+    JINA_SEARCH_BASE_URL: str = "https://s.jina.ai/http://www.google.com/search?q="
+    JINA_SEARCH_TIMEOUT_SEC: int = 20

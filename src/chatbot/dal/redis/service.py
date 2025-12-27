@@ -49,6 +49,8 @@ class RedisService:
 
         self._bucket_take_sha: Optional[str] = None
         self._bucket_take_lua: Optional[str] = None
+        self._bucket_refund_sha: Optional[str] = None
+        self._bucket_refund_lua: Optional[str] = None
 
     def _load_lua_file(self, filename: str) -> str:
         """
@@ -230,6 +232,45 @@ class RedisService:
         except Exception:
             logger.exception("bucket_take 执行失败，默认拒绝")
             return False
+
+    async def bucket_refund(self, g: int, cost: int = 1) -> None:
+        """
+        将 token 退回群级令牌桶（best-effort）。
+        使用 lua/bucket_refund.lua 保证原子性。
+        """
+        if self._bucket_refund_lua is None:
+            self._bucket_refund_lua = self._load_lua_file("bucket_refund.lua")
+
+        if self._bucket_refund_sha is None:
+            try:
+                self._bucket_refund_sha = await self.r.script_load(self._bucket_refund_lua)
+            except Exception:
+                self._bucket_refund_sha = None
+
+        now = now_ms()
+        try:
+            if self._bucket_refund_sha:
+                await self.r.evalsha(
+                    self._bucket_refund_sha,
+                    1,
+                    keys.bucket(g),
+                    now,
+                    self.bucket_cap,
+                    self.bucket_period_ms,
+                    int(cost),
+                )
+            else:
+                await self.r.eval(
+                    self._bucket_refund_lua,
+                    1,
+                    keys.bucket(g),
+                    now,
+                    self.bucket_cap,
+                    self.bucket_period_ms,
+                    int(cost),
+                )
+        except Exception:
+            logger.exception("bucket_refund 执行失败，忽略")
 
     # -------------------------
     # 调度：ZSET + 取消 + 第二条 pending
