@@ -25,61 +25,37 @@ class RocketMQConsumeConfig:
     handler_timeout_sec: float = 2.0
     drop_bad_json: bool = True
 
-
-def _parse_extra(x: Any) -> str:
-    """
-    proto 的 extra 是 string（你当前 proto 如此），MQ 里 extra 可能是 object 或 string。
-    这里统一转成 string（若是 dict/list 就 JSON dump）。
-    """
-    if x is None:
-        return ""
-    if isinstance(x, str):
-        return x
-    try:
-        return orjson.dumps(x).decode("utf-8")
-    except Exception:
-        return str(x)
-
-
 def parse_message_event_json(raw: bytes) -> im_pb2.MessageEvent:
-    """
-    MQ body 是 JSON；构造 proto MessageEvent 并返回。
-    sender 字段：
-    - sender_id + sender_type
-    """
     obj = orjson.loads(raw)
     if not isinstance(obj, dict):
         raise ValueError("MQ JSON must be an object")
 
-    body = obj.get("msg_body") or obj.get("msgBody") or {}
+    body = obj.get("msg_body") or {}
     if not isinstance(body, dict):
         raise ValueError("msg_body must be an object")
 
     sender_id = int(body.get("sender_id", 0) or 0)
     sender_type = int(body.get("sender_type", 0) or 0)
 
-    # con_index 兼容（可能在外层/内层）
-    con_index = body.get("con_index", obj.get("con_index", 0)) or 0
-
     msg_body = im_pb2.MessageBody(
         sender_id=sender_id,
         sender_type=sender_type,
         con_id=str(body.get("con_id", "") or ""),
         con_short_id=int(body.get("con_short_id", 0) or 0),
-        con_type=int(body.get("con_type", 2) or 2),
+        con_type=int(body.get("con_type", 0) or 0),
         client_msg_id=int(body.get("client_msg_id", 0) or 0),
         msg_id=int(body.get("msg_id", 0) or 0),
         msg_type=int(body.get("msg_type", 0) or 0),
         msg_content=str(body.get("msg_content", "") or ""),
         create_time=int(body.get("create_time", 0) or 0),
-        extra=_parse_extra(body.get("extra")),
-        con_index=int(con_index),
+        extra=str(body.get("extra", "") or ""),
+        con_index=int(body.get("con_index", 0) or 0),
     )
 
     evt = im_pb2.MessageEvent(
         msg_body=msg_body,
-        con_index=int(obj.get("con_index", msg_body.con_index) or msg_body.con_index),
-        stored=bool(obj.get("stored", True)),
+        con_index=int(obj.get("con_index", 0) or 0),
+        stored=bool(obj.get("stored", False)),
         user_con_index=int(obj.get("user_con_index", 0) or 0),
         pre_user_con_index=int(obj.get("pre_user_con_index", 0) or 0),
         badge_count=int(obj.get("badge_count", 0) or 0),
@@ -107,15 +83,11 @@ class MessageConsumer:
                 if body is None:
                     return ConsumeStatus.CONSUME_SUCCESS
 
-                if isinstance(body, (bytes, bytearray)):
-                    raw = bytes(body)
-                elif isinstance(body, str):
-                    raw = body.encode("utf-8", errors="ignore")
-                else:
-                    raw = str(body).encode("utf-8", errors="ignore")
+                raw = bytes(body)
 
                 try:
                     evt = parse_message_event_json(raw)
+                    logger.info("rocketmq: got message: %s", evt)
                 except Exception:
                     logger.exception("rocketmq: bad json payload")
                     return ConsumeStatus.CONSUME_SUCCESS if self._cfg.drop_bad_json else ConsumeStatus.RECONSUME_LATER
@@ -133,8 +105,7 @@ class MessageConsumer:
             consumer.subscribe(self._cfg.topic, _callback)
 
         consumer.start()
-        logger.info("rocketmq consumer started: %s %s %s",
-                    self._cfg.namesrv_addr, self._cfg.topic, self._cfg.consumer_group)
+        logger.info("rocketmq consumer started: %s %s %s",self._cfg.namesrv_addr, self._cfg.topic, self._cfg.consumer_group)
 
         try:
             await self._stop_evt.wait()

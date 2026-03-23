@@ -40,8 +40,8 @@ enum ConMessageType{
 enum SenderType{
   SenderType_Not_Use = 0;
   User = 1;
-  Conv = 2;
-  AI = 3;
+  AI = 2;
+  Conv = 3;
 }
 
 message MessageEvent{
@@ -237,19 +237,6 @@ message GetMembersReadIndexResponse{
   common.BaseResp baseResp = 255;
 }
 
-message AgentInfo{
-  int64 agent_id = 1;
-  string agent_name = 2;
-  string avatar_uri = 3;
-  string description = 4;
-  string personality = 5;
-  int64 owner_id = 6;
-  int64 create_time = 7;
-  int64 modify_time = 8;
-  int32 status = 9;
-  string extra = 10;
-}
-
 message ConversationAgentInfo{
   int64 con_short_id = 1;
   int64 agent_id = 2;
@@ -257,7 +244,16 @@ message ConversationAgentInfo{
   int64 modify_time = 4;
   int32 status = 5;
   string extra = 6;
-  AgentInfo agent_info = 7;
+}
+
+message AddConversationAgentsRequest{
+  int64 con_short_id = 1;
+  string con_id = 2;
+  repeated int64 agent_ids = 3;
+  int64 operator = 4;
+}
+message AddConversationAgentsResponse{
+  common.BaseResp baseResp = 255;
 }
 
 message GetConversationAgentsRequest{
@@ -362,6 +358,7 @@ service IMService{
   rpc AddConversationMembers(AddConversationMembersRequest)returns(AddConversationMembersResponse);
   rpc GetConversationMembers(GetConversationMembersRequest)returns(GetConversationMembersResponse);
   rpc GetMembersReadIndex(GetMembersReadIndexRequest)returns(GetMembersReadIndexResponse);
+  rpc AddConversationAgents(AddConversationAgentsRequest)returns(AddConversationAgentsResponse);
   rpc GetConversationAgents(GetConversationAgentsRequest)returns(GetConversationAgentsResponse);
   rpc SendNotice(SendNoticeRequest)returns(SendNoticeResponse);
   rpc GetNoticeList(GetNoticeListRequest)returns(GetNoticeListResponse);

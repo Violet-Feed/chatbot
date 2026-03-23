@@ -1,106 +1,69 @@
 # Chatbot Orchestrator
 
-基于 IMService 的群聊机器人编排服务，支持窗口聚合、LLM 决策、延迟发送、多 Agent、记忆与搜索。
+一个面向群聊的多 Agent 编排系统，目标是拟人、可控地参与对话，并在保证成本与稳定性的前提下自动学习群风格与黑话。
 
-## 核心能力
+## 业务架构
 
-- 窗口聚合：5s 基础窗口，热度可延长到 10s
-- LangGraph 流程：频控 -> LLM 决策 -> 搜索/黑话处理 -> 生成 -> 记忆更新
-- 0~2 bot 回复：主/次回复严格约束，bot↔bot 限制
-- 记忆系统：滚动摘要、事件记忆、语言风格/热词/术语表
-- 搜索与黑话：Jina 搜索 + 上下文推断 + 询问群里
-- 发送调度：Redis ZSET 延迟发送，幂等去重，失败重试
+- 多 Agent 群聊：
+  - 每个 Agent 独立人设、活跃度、别名，适配不同话题与语气
+  - 同群多 Agent 竞争与协作，保证“谁更合适”而非“谁都说话”
+- 自动决策：
+  - 窗口聚合后统一决策，避免逐条触发引发刷屏
+  - 由“决策 Agent/LLM”判断是否需要发言，以及由哪个 Agent 发言
+  - LLM 决策 0~2 个 Agent，主/次必须不同
+  - 严格约束 bot↔bot：只有明确点名才允许接话
+- 拟人化策略（核心，依赖记忆系统）：
+  - 记忆驱动：滚动摘要 + 事件记忆 + 风格/热词 + 术语表共同塑造语气与表达
+  - 风格学习：从人类消息中学习“情境->表达方式”，避免机械模板
+  - 热词/黑话：对近期热词与术语做持续更新，保证语感接近群聊习惯
+  - 上下文一致性：摘要与事件记忆让回复保持前后连贯
+  - 延迟发送：首条加入“输入延迟”，模拟真实打字节奏
+  - 分段输出：长句拆成 2~3 段，段间插入短停顿
+  - 第二条强约束：仅在明确触发下允许第二条，并保证间隔
+  - 人类打断：若窗口内有真人新消息，取消第二条排队任务
+  - 复读抑制：与最近 bot 内容相似度过高则放弃发送
+  - 记忆系统：
+    - 滚动摘要：每窗口更新群聊上下文，支持长对话持续参与
+    - 事件记忆：关键事实/约定/禁忌规则抽取，带 TTL
+    - 语言风格：学习“情境->表达方式”与近期热词
+    - 术语表：黑话含义沉淀为 glossary，并在后续回复中引用
+    - 搜索与黑话：搜索由 LLM 决策触发；黑话流程为“搜索 -> 上下文推断 -> 仍不懂则询问群里”，结果回写术语表
 
-## 运行架构
+## 技术架构
 
-### 组件
+### 数据流主链路
+1) MQ 消息进入：RocketMQ -> MessageConsumer -> Planner.on_message  
+2) 窗口聚合：Redis 维护窗口 id/截止时间/消息缓冲  
+3) LangGraph 编排：频控 -> LLM 决策 -> 搜索/黑话处理 -> 生成与调度  
+4) 发送调度：Redis ZSET -> SendScheduler -> IMService.SendMessage  
+5) 记忆更新：MySQL 持久化摘要/事件/风格/术语
 
-- Consumer：订阅 RocketMQ 消息并转换为 MessageEvent
-- Planner：窗口管理、LLM 决策、生成与调度、记忆更新
-- Scheduler：从 Redis 取出到期任务并调用 IMService.SendMessage
-- Memory：MySQL 存储摘要/事件/风格/术语表
+### 多 Agent 决策如何实现
+- 由“决策 Agent/LLM”基于窗口消息与 Agent 人设输出 0~2 个 Agent id
+- 本地校验规则：
+  - 不允许 primary/secondary 相同
+  - bot↔bot 必须显式点名
+  - 冷却状态与群级 token bucket 必须通过
+- 失败回退：
+  - LLM 不可用时不发言
+  - 决策不合法时自动拒绝
 
-### LangGraph 流程
+### 自动说话如何实现
+- 窗口聚合后，决策 Agent 决定“是否说话 + 谁说话”
+- 通过群级 token bucket、冷却与 bot↔bot 约束抑制刷屏
+- 若不满足约束或 LLM 失败则不发言
 
-1) load_context：加载 agent 列表、冷却与链深
-2) rate_limit：群级 token bucket
-3) llm_decide：决定是否回复与选中 agent
-4) resolve_search：
-   - LLM 决策是否搜索
-   - 黑话检测：联网搜索 -> 上下文推断 -> 不懂则追问
-   - 结果写入 glossary
-5) schedule_primary/secondary：生成与入队
-6) finalize：链深更新与 token 退还
-7) memory_update：摘要/事件/风格/术语表更新
-
-## 数据协议（im.proto）
-
-核心字段已切换为 sender 抽象：
-
-```proto
-message MessageBody{
-  int64 sender_id = 1;
-  int32 sender_type = 2; // 1=User, 2=Conv, 3=AI
-  ...
-}
-
-message SendMessageRequest{
-  int64 sender_id = 1;
-  int32 sender_type = 2;
-  ...
-}
-```
-
-## 记忆结构
-
-存储在 `conversation_style_fingerprint.features` 的 JSON：
-
-```json
-{
-  "style_rules": ["..."],
-  "hotwords": ["..."],
-  "glossary": [
-    {"term": "词条", "meaning": "解释", "source": "search|context"}
-  ],
-  "updated_at": 1710000000000
-}
-```
-
-## 配置
-
-配置通过 `.env` 加载（见 `.env.example`）：
-
-```
-# LLM
-DASHSCOPE_API_KEY=...
-QWEN_BASE_URL=...
-QWEN_MODEL=...
-
-# Jina Search
-JINA_API_KEY=...
-JINA_SEARCH_BASE_URL=https://s.jina.ai/http://www.google.com/search?q=
-JINA_SEARCH_TIMEOUT_SEC=20
-```
-
-## 主要入口
-
-- `chatbot-bot`: `src/chatbot/main.py`
-- `SendScheduler`: `src/chatbot/scheduler/send_scheduler.py`
-
-## 运行说明
-
-1) 配置 `.env`
-2) 启动 RocketMQ / Redis / MySQL / IMService
-3) 启动服务：
-
-```bash
-uv run chatbot-bot
-```
-
-## 目录结构
-
-- `src/chatbot/consumer` MQ 消费与 MessageEvent 解析
-- `src/chatbot/planner` LangGraph 编排、LLM 决策与生成
-- `src/chatbot/scheduler` 发送调度
-- `src/chatbot/dal` Redis/MySQL/IMService 接口
-- `src/chatbot/memory` 记忆处理逻辑
+### 拟人化如何实现
+- 记忆驱动：摘要/事件/风格/术语表进入提示词，形成群风一致表达
+- 滚动摘要：每窗口调用 LLM summarize 更新摘要，保持上下文一致
+- 事件记忆：优先 LLM 抽取，失败回退规则抽取，减少遗漏
+- 风格学习：LLM 输出 style_rules + hotwords，合并去重形成群聊语气
+- 搜索与黑话：
+  - 搜索决策：LLM 判断是否需要联网搜索，生成 query
+  - 黑话检测：LLM 从最近窗口提取疑似黑话
+  - 处理链路：Jina 搜索 -> 上下文推断 -> 仍不懂则澄清提问
+  - 结果沉淀：写入 glossary，供后续提示词引用
+- 延迟发送：发送时间 = 基础延迟 + 文本长度因子 + 抖动
+- 分段输出：长句拆分为多段，段间插入随机“打字停顿”
+- 第二条间隔：严格强制 gap，且允许被真人消息打断取消
+- 复读抑制：与最近 bot 文本相似度过高直接丢弃
