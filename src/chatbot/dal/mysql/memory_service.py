@@ -1,331 +1,342 @@
-# src/chatbot/dal/mysql/memory_service.py
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Iterable, List
 
-from sqlalchemy import delete, select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from chatbot.dal.mysql.models import (
-    ConversationEpisodicMemory,
-    ConversationRollingSummary,
-    ConversationStyleFingerprint,
-)
 from chatbot.utils.time import now_ms
 
 
-class RollingSummaryService:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
-        self._sf = session_factory
-
-    async def load(self, con_short_id: int) -> Tuple[str, int]:
-        """返回 (summary_text, last_con_index)。"""
-        async with self._sf() as ses:
-            row = await ses.get(ConversationRollingSummary, con_short_id)
-            if not row:
-                return "", 0
-            return row.summary, int(row.last_con_index)
-
-    async def upsert(self, con_short_id: int, summary: str, last_con_index: int) -> None:
-        """
-        写入/更新滚动摘要。
-        约束：last_con_index 只能前进不能回退（避免并发/乱序导致摘要覆盖）。
-        """
-        async with self._sf() as ses:
-            row = await ses.get(ConversationRollingSummary, con_short_id)
-            ts = now_ms()
-            if not row:
-                ses.add(
-                    ConversationRollingSummary(
-                        con_short_id=con_short_id,
-                        summary=summary,
-                        last_con_index=int(last_con_index),
-                        updated_at=ts,
-                    )
-                )
-            else:
-                # 防回退：如果传入更小的 last_con_index，则不更新
-                if int(last_con_index) >= int(row.last_con_index):
-                    row.summary = summary
-                    row.last_con_index = int(last_con_index)
-                    row.updated_at = ts
-            await ses.commit()
+@dataclass(frozen=True)
+class GlossaryItem:
+    term: str
+    meaning: str
+    count: int = 1
 
 
-class EpisodicMemoryService:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
-        self._sf = session_factory
+@dataclass(frozen=True)
+class SummaryState:
+    short_summary: str
+    long_summary: str
+    short_version: int
+    long_version: int
+    short_updated_at: int
+    long_updated_at: int
+    updated_at: int
 
-    async def load_active(self, con_short_id: int, now_ms_value: int) -> List[Dict[str, Any]]:
-        """加载未过期的事件记忆，按 importance 降序。"""
-        async with self._sf() as ses:
-            # expire_at=0 表示不过期
-            stmt1 = (
-                select(ConversationEpisodicMemory)
-                .where(ConversationEpisodicMemory.con_short_id == con_short_id)
-                .where(ConversationEpisodicMemory.expire_at == 0)
-                .order_by(ConversationEpisodicMemory.importance.desc())
-                .limit(50)
-            )
-            rows1 = (await ses.execute(stmt1)).scalars().all()
 
-            stmt2 = (
-                select(ConversationEpisodicMemory)
-                .where(ConversationEpisodicMemory.con_short_id == con_short_id)
-                .where(ConversationEpisodicMemory.expire_at > now_ms_value)
-                .order_by(ConversationEpisodicMemory.importance.desc())
-                .limit(50)
-            )
-            rows2 = (await ses.execute(stmt2)).scalars().all()
+class MemoryService:
+    def __init__(self, sf: async_sessionmaker[AsyncSession]) -> None:
+        self.sf = sf
 
-        rows = list(rows1) + [r for r in rows2 if r not in rows1]
-        return [
-            {
-                "id": int(r.id),
-                "type": r.event_type,
-                "content": r.content,
-                "importance": float(r.importance),
-                "expire_at": int(r.expire_at),
-                "created_at": int(r.created_at),
-            }
-            for r in rows
-        ]
-
-    async def add(
-        self,
-        con_short_id: int,
-        event_type: str,
-        content: str,
-        importance: float = 0.5,
-        ttl_ms: int = 0,
-    ) -> None:
-        """新增事件记忆。ttl_ms=0 表示不过期。"""
-        ts = now_ms()
-        expire_at = 0 if ttl_ms <= 0 else ts + int(ttl_ms)
-        row = ConversationEpisodicMemory(
-            con_short_id=con_short_id,
-            event_type=event_type,
-            content=content,
-            importance=float(importance),
-            expire_at=expire_at,
-            created_at=ts,
+    async def get_summary_state(self, con_short_id: int) -> SummaryState:
+        sql = text(
+            """
+            SELECT
+                short_summary,
+                long_summary,
+                short_version,
+                long_version,
+                short_updated_at,
+                long_updated_at,
+                updated_at
+            FROM chatbot_memory_summary
+            WHERE con_short_id = :con_short_id
+            """
         )
-        async with self._sf() as ses:
-            ses.add(row)
-            await ses.commit()
 
-    async def add_many(self, con_short_id: int, events: List[Dict[str, Any]]) -> int:
-        """
-        批量新增事件记忆（减少 commit）。
-        events 每项：
-          {"type":..., "content":..., "importance":0~1, "ttl_ms":0|ms}
-        返回插入条数。
-        """
-        if not events:
-            return 0
+        async with self.sf() as session:
+            result = await session.execute(sql, {"con_short_id": con_short_id})
+            row = result.mappings().first()
 
+        if not row:
+            return SummaryState(
+                short_summary="",
+                long_summary="",
+                short_version=0,
+                long_version=0,
+                short_updated_at=0,
+                long_updated_at=0,
+                updated_at=0,
+            )
+
+        return SummaryState(
+            short_summary=str(row.get("short_summary") or ""),
+            long_summary=str(row.get("long_summary") or ""),
+            short_version=int(row.get("short_version") or 0),
+            long_version=int(row.get("long_version") or 0),
+            short_updated_at=int(row.get("short_updated_at") or 0),
+            long_updated_at=int(row.get("long_updated_at") or 0),
+            updated_at=int(row.get("updated_at") or 0),
+        )
+
+    async def save_short_summary(self, con_short_id: int, short_summary: str) -> None:
         ts = now_ms()
-        rows: List[ConversationEpisodicMemory] = []
-        for e in events:
-            content = str(e.get("content", "") or "").strip()
-            if not content:
+        sql = text(
+            """
+            INSERT INTO chatbot_memory_summary (
+                con_short_id,
+                short_summary,
+                long_summary,
+                short_version,
+                long_version,
+                short_updated_at,
+                long_updated_at,
+                updated_at
+            )
+            VALUES (
+                :con_short_id,
+                :short_summary,
+                '',
+                1,
+                0,
+                :ts,
+                0,
+                :ts
+            ) AS new
+            ON DUPLICATE KEY UPDATE
+                short_summary = new.short_summary,
+                short_version = chatbot_memory_summary.short_version + 1,
+                short_updated_at = new.short_updated_at,
+                updated_at = new.updated_at
+            """
+        )
+
+        async with self.sf() as session:
+            await session.execute(
+                sql,
+                {
+                    "con_short_id": con_short_id,
+                    "short_summary": short_summary or "",
+                    "ts": ts,
+                },
+            )
+            await session.commit()
+
+    async def save_long_summary(self, con_short_id: int, long_summary: str) -> None:
+        ts = now_ms()
+        sql = text(
+            """
+            INSERT INTO chatbot_memory_summary (
+                con_short_id,
+                short_summary,
+                long_summary,
+                short_version,
+                long_version,
+                short_updated_at,
+                long_updated_at,
+                updated_at
+            )
+            VALUES (
+                :con_short_id,
+                '',
+                :long_summary,
+                0,
+                1,
+                0,
+                :ts,
+                :ts
+            ) AS new
+            ON DUPLICATE KEY UPDATE
+                long_summary = new.long_summary,
+                long_version = chatbot_memory_summary.long_version + 1,
+                long_updated_at = new.long_updated_at,
+                updated_at = new.updated_at
+            """
+        )
+
+        async with self.sf() as session:
+            await session.execute(
+                sql,
+                {
+                    "con_short_id": con_short_id,
+                    "long_summary": long_summary or "",
+                    "ts": ts,
+                },
+            )
+            await session.commit()
+
+    async def upsert_glossary_terms(self, con_short_id: int, terms: Iterable[str]) -> None:
+        rows = []
+        ts = now_ms()
+
+        for term in terms:
+            t = str(term or "").strip()
+            if not t:
                 continue
-            ttl_ms = int(e.get("ttl_ms", 0) or 0)
-            expire_at = 0 if ttl_ms <= 0 else ts + ttl_ms
             rows.append(
-                ConversationEpisodicMemory(
-                    con_short_id=con_short_id,
-                    event_type=str(e.get("type", "generic") or "generic"),
-                    content=content,
-                    importance=float(e.get("importance", 0.5) or 0.5),
-                    expire_at=int(expire_at),
-                    created_at=int(ts),
-                )
+                {
+                    "con_short_id": con_short_id,
+                    "term": t[:64],
+                    "updated_at": ts,
+                }
             )
 
         if not rows:
-            return 0
+            return
 
-        async with self._sf() as ses:
-            ses.add_all(rows)
-            await ses.commit()
-        return len(rows)
-
-    async def purge_expired(self, con_short_id: int, now_ms_value: int) -> int:
-        """清理过期事件记忆，返回删除行数。"""
-        async with self._sf() as ses:
-            stmt = (
-                delete(ConversationEpisodicMemory)
-                .where(ConversationEpisodicMemory.con_short_id == con_short_id)
-                .where(ConversationEpisodicMemory.expire_at > 0)
-                .where(ConversationEpisodicMemory.expire_at <= now_ms_value)
+        sql = text(
+            """
+            INSERT INTO chatbot_memory_glossary (
+                con_short_id,
+                term,
+                meaning,
+                `count`,
+                updated_at
             )
-            res = await ses.execute(stmt)
-            await ses.commit()
-            return int(res.rowcount or 0)
+            VALUES (
+                :con_short_id,
+                :term,
+                '',
+                1,
+                :updated_at
+            ) AS new
+            ON DUPLICATE KEY UPDATE
+                `count` = chatbot_memory_glossary.`count` + 1,
+                updated_at = new.updated_at
+            """
+        )
 
-    async def purge_expired_all(self, now_ms_value: int) -> int:
-        """可选：全局清理过期事件记忆（可由定时任务调用）。"""
-        async with self._sf() as ses:
-            stmt = (
-                delete(ConversationEpisodicMemory)
-                .where(ConversationEpisodicMemory.expire_at > 0)
-                .where(ConversationEpisodicMemory.expire_at <= now_ms_value)
-            )
-            res = await ses.execute(stmt)
-            await ses.commit()
-            return int(res.rowcount or 0)
+        async with self.sf() as session:
+            await session.execute(sql, rows)
+            await session.commit()
 
-
-class StyleService:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
-        self._sf = session_factory
-
-    async def load(self, con_short_id: int) -> Dict[str, Any]:
-        """返回风格特征（features 字符串 + updated_at）。"""
-        async with self._sf() as ses:
-            row = await ses.get(ConversationStyleFingerprint, con_short_id)
-            if not row:
-                return {}
-            return self._parse_features(row.features, int(row.updated_at))
-
-    async def upsert(self, con_short_id: int, features: str) -> None:
-        """写入/更新风格指纹。"""
-        ts = now_ms()
-        async with self._sf() as ses:
-            row = await ses.get(ConversationStyleFingerprint, con_short_id)
-            if not row:
-                ses.add(ConversationStyleFingerprint(con_short_id=con_short_id, features=features, updated_at=ts))
-            else:
-                row.features = features
-                row.updated_at = ts
-            await ses.commit()
-
-    async def merge_update(
+    async def get_terms_need_meaning(
         self,
         con_short_id: int,
-        update: Dict[str, Any],
-        max_style_rules: int = 20,
-        max_hotwords: int = 50,
-        max_glossary: int = 50,
-    ) -> None:
-        """合并更新风格规则与热词（去重、保留最新）。"""
-        ts = now_ms()
-        async with self._sf() as ses:
-            row = await ses.get(ConversationStyleFingerprint, con_short_id)
+        min_count: int = 3,
+        limit: int = 20,
+    ) -> List[str]:
+        sql = text(
+            """
+            SELECT term
+            FROM chatbot_memory_glossary
+            WHERE con_short_id = :con_short_id
+              AND `count` >= :min_count
+              AND meaning = ''
+            LIMIT :limit_n
+            """
+        )
 
-            base = {}
-            if row and row.features:
-                base = self._parse_features(row.features, int(row.updated_at or ts))
-
-            merged = self._merge_features(
-                base,
-                update,
-                max_style_rules=max_style_rules,
-                max_hotwords=max_hotwords,
-                max_glossary=max_glossary,
+        async with self.sf() as session:
+            result = await session.execute(
+                sql,
+                {
+                    "con_short_id": con_short_id,
+                    "min_count": min_count,
+                    "limit_n": limit,
+                },
             )
+            rows = result.mappings().all()
 
-            if not row:
-                ses.add(
-                    ConversationStyleFingerprint(
-                        con_short_id=con_short_id,
-                        features=json.dumps(merged, ensure_ascii=False, separators=(",", ":")),
-                        updated_at=ts,
-                    )
-                )
-            else:
-                row.features = json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
-                row.updated_at = ts
-            await ses.commit()
+        return [
+            str(row.get("term") or "")
+            for row in rows
+            if str(row.get("term") or "").strip()
+        ]
 
-    def _parse_features(self, raw: str, updated_at: int) -> Dict[str, Any]:
-        try:
-            obj = json.loads(raw or "{}")
-        except Exception:
-            obj = {}
-        if not isinstance(obj, dict):
-            obj = {}
-
-        style_rules = obj.get("style_rules")
-        hotwords = obj.get("hotwords")
-        glossary = obj.get("glossary")
-
-        return {
-            "style_rules": style_rules if isinstance(style_rules, list) else [],
-            "hotwords": hotwords if isinstance(hotwords, list) else [],
-            "glossary": glossary if isinstance(glossary, list) else [],
-            "updated_at": int(updated_at),
-        }
-
-    def _merge_features(
+    async def save_glossary_meanings(
         self,
-        base: Dict[str, Any],
-        update: Dict[str, Any],
-        max_style_rules: int,
-        max_hotwords: int,
-        max_glossary: int,
-    ) -> Dict[str, Any]:
-        def _norm(s: str) -> str:
-            return str(s or "").strip().casefold()
+        con_short_id: int,
+        items: Iterable[GlossaryItem],
+    ) -> None:
+        rows = []
+        ts = now_ms()
 
-        base_rules = [str(x).strip() for x in (base.get("style_rules") or []) if str(x).strip()]
-        new_rules = [str(x).strip() for x in (update.get("style_rules") or []) if str(x).strip()]
-
-        rule_seen = set()
-        merged_rules: List[str] = []
-        for s in new_rules + base_rules:
-            key = _norm(s)
-            if not key or key in rule_seen:
-                continue
-            rule_seen.add(key)
-            merged_rules.append(s)
-            if len(merged_rules) >= max_style_rules:
-                break
-
-        base_hot = [str(x).strip() for x in (base.get("hotwords") or []) if str(x).strip()]
-        new_hot = [str(x).strip() for x in (update.get("hotwords") or []) if str(x).strip()]
-
-        hot_seen = set()
-        merged_hot: List[str] = []
-        for s in new_hot + base_hot:
-            key = _norm(s)
-            if not key or key in hot_seen:
-                continue
-            hot_seen.add(key)
-            merged_hot.append(s)
-            if len(merged_hot) >= max_hotwords:
-                break
-
-        base_glossary = base.get("glossary") or []
-        new_glossary = update.get("glossary") or []
-        merged_glossary: List[Dict[str, Any]] = []
-        glossary_seen = set()
-        for it in (new_glossary + base_glossary):
-            if not isinstance(it, dict):
-                continue
-            term = str(it.get("term", "") or "").strip()
-            meaning = str(it.get("meaning", "") or "").strip()
+        for item in items:
+            term = str(item.term or "").strip()
+            meaning = str(item.meaning or "").strip()
             if not term or not meaning:
                 continue
-            key = _norm(term)
-            if key in glossary_seen:
-                continue
-            glossary_seen.add(key)
-            merged_glossary.append(
+            rows.append(
                 {
-                    "term": term,
-                    "meaning": meaning,
-                    "source": str(it.get("source", "") or "").strip(),
+                    "con_short_id": con_short_id,
+                    "term": term[:64],
+                    "meaning": meaning[:255],
+                    "updated_at": ts,
                 }
             )
-            if len(merged_glossary) >= max_glossary:
-                break
 
-        return {
-            "style_rules": merged_rules,
-            "hotwords": merged_hot,
-            "glossary": merged_glossary,
-            "updated_at": int(now_ms()),
-        }
+        if not rows:
+            return
+
+        sql = text(
+            """
+            INSERT INTO chatbot_memory_glossary (
+                con_short_id,
+                term,
+                meaning,
+                `count`,
+                updated_at
+            )
+            VALUES (
+                :con_short_id,
+                :term,
+                :meaning,
+                1,
+                :updated_at
+            ) AS new
+            ON DUPLICATE KEY UPDATE
+                meaning = new.meaning,
+                updated_at = new.updated_at
+            """
+        )
+
+        async with self.sf() as session:
+            await session.execute(sql, rows)
+            await session.commit()
+
+    async def get_relevant_glossary(
+        self,
+        con_short_id: int,
+        recent_text: str,
+        limit: int = 20,
+    ) -> List[GlossaryItem]:
+        recent_text = str(recent_text or "").strip()
+
+        if recent_text:
+            sql = text(
+                """
+                SELECT term, meaning, `count`
+                FROM chatbot_memory_glossary
+                WHERE con_short_id = :con_short_id
+                  AND meaning <> ''
+                  AND INSTR(:recent_text, term) > 0
+                ORDER BY term ASC
+                LIMIT :limit_n
+                """
+            )
+            params = {
+                "con_short_id": con_short_id,
+                "recent_text": recent_text,
+                "limit_n": limit,
+            }
+        else:
+            sql = text(
+                """
+                SELECT term, meaning, `count`
+                FROM chatbot_memory_glossary
+                WHERE con_short_id = :con_short_id
+                  AND meaning <> ''
+                LIMIT :limit_n
+                """
+            )
+            params = {
+                "con_short_id": con_short_id,
+                "limit_n": limit,
+            }
+
+        async with self.sf() as session:
+            result = await session.execute(sql, params)
+            rows = result.mappings().all()
+
+        return [
+            GlossaryItem(
+                term=str(row.get("term") or ""),
+                meaning=str(row.get("meaning") or ""),
+                count=int(row.get("count") or 0),
+            )
+            for row in rows
+        ]

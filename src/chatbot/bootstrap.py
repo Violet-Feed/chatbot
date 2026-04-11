@@ -21,6 +21,7 @@ class Container:
 
     redis_svc: Any
     agent_svc: Any
+    memory_svc: Any
     llm: Any
 
     planner: Any
@@ -69,7 +70,10 @@ def build_container(settings: Optional[Settings] = None) -> Container:
     engine, sf = _build_mysql_engine_and_sf(s.MYSQL_DSN)
 
     from chatbot.dal.mysql.agent_service import AgentService
+    from chatbot.dal.mysql.memory_service import MemoryService
+
     agent_svc = AgentService(sf)
+    memory_svc = MemoryService(sf)
 
     from chatbot.dal.redis.service import RedisService
     redis_svc = RedisService(redis_client)
@@ -86,6 +90,7 @@ def build_container(settings: Optional[Settings] = None) -> Container:
         im=im,
         llm=llm,
         agent_svc=agent_svc,
+        memory_svc=memory_svc,
         window_sec=getattr(s, "WINDOW_SEC", 5),
     )
 
@@ -112,6 +117,7 @@ def build_container(settings: Optional[Settings] = None) -> Container:
         im=im,
         redis_svc=redis_svc,
         agent_svc=agent_svc,
+        memory_svc=memory_svc,
         llm=llm,
         planner=planner,
         consumer=consumer,

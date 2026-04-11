@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 import orjson
+from google.protobuf.json_format import MessageToDict
 from rocketmq.client import PushConsumer, ConsumeStatus  # rocketmq-client-python
 
 from chatbot.proto_gen import im_pb2  # 你的 proto_gen 在 chatbot 下
@@ -87,7 +88,7 @@ class MessageConsumer:
 
                 try:
                     evt = parse_message_event_json(raw)
-                    logger.info("rocketmq: got message: %s", evt)
+                    logger.info("rocketmq: got message: %s", orjson.dumps(MessageToDict(evt, preserving_proto_field_name=True)).decode())
                 except Exception:
                     logger.exception("rocketmq: bad json payload")
                     return ConsumeStatus.CONSUME_SUCCESS if self._cfg.drop_bad_json else ConsumeStatus.RECONSUME_LATER
