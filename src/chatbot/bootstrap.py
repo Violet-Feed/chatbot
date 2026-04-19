@@ -81,7 +81,7 @@ def build_container(settings: Optional[Settings] = None) -> Container:
     from chatbot.dal.rpc.im import IMClient
     im = IMClient(target=s.IM_GRPC_TARGET)
 
-    from chatbot.planner.llm import LLMClient
+    from chatbot.agent.llm import LLMClient
     llm = LLMClient(s)
 
     from chatbot.agent.tools import make_jina_search_tool
@@ -104,8 +104,8 @@ def build_container(settings: Optional[Settings] = None) -> Container:
         max_tool_calls=getattr(s, "AGENT_MAX_TOOL_CALLS", 1),
     )
 
-    from chatbot.planner.planner import Planner
-    planner = Planner(
+    from chatbot.agent.window import WindowManager
+    planner = WindowManager(
         redis_svc=redis_svc,
         llm=llm,
         memory_svc=memory_svc,

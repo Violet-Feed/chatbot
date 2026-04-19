@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from chatbot.dal.mysql.memory_service import GlossaryItem
-from chatbot.planner import prompts
+from chatbot.agent import prompts
 from chatbot.settings import Settings
 
 

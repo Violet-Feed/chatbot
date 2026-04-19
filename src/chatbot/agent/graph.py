@@ -8,11 +8,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import create_react_agent
 
-from chatbot.agent.prompts import AGENT_SYSTEM_TEMPLATE
+from chatbot.agent.prompts import AGENT_SYSTEM_TEMPLATE, AGENT_USER_TEMPLATE
 from chatbot.agent.state import Agent, ConversationState
 from chatbot.agent.tools import make_fetch_context_tool
-from chatbot.planner import prompts as reply_prompts
-from chatbot.planner.llm import DecisionInputs, LLMClient
+from chatbot.agent.llm import DecisionInputs, LLMClient
 from chatbot.utils.json import json_dumps
 from chatbot.utils.time import now_ms
 
@@ -164,7 +163,7 @@ class ConversationGraph:
             personality=agent.personality or "",
             trigger_reason=state["reply_reason"] or "",
         )
-        user_prompt = reply_prompts.REPLY_USER.format(
+        user_prompt = AGENT_USER_TEMPLATE.format(
             recent_messages=_format_messages(items[-30:]),
             short_summary=memory_state.short_summary if memory_state else "",
             long_summary=memory_state.long_summary if memory_state else "",

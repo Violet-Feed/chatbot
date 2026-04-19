@@ -5,7 +5,7 @@ import logging
 from typing import Any, Dict, List
 
 from chatbot.proto_gen import im_pb2
-from chatbot.planner.llm import (
+from chatbot.agent.llm import (
     ShortMemoryInputs,
     LongMemoryInputs,
     GlossaryExtractInputs,
@@ -17,7 +17,7 @@ from chatbot.utils.time import now_ms
 logger = logging.getLogger(__name__)
 
 
-class Planner:
+class WindowManager:
     SHORT_MSG_TRIGGER = 20
     SHORT_TIME_TRIGGER_MS = 30 * 60 * 1000
 
