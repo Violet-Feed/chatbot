@@ -63,5 +63,9 @@ class Settings(BaseSettings):
 
     # --- Jina Search ---
     JINA_API_KEY: str = ""
-    JINA_SEARCH_BASE_URL: str = "https://s.jina.ai/http://www.google.com/search?q="
+    JINA_SEARCH_BASE_URL: str = "https://s.jina.ai/"
     JINA_SEARCH_TIMEOUT_SEC: int = 20
+    JINA_SEARCH_MAX_CHARS: int = 2000
+
+    # --- Agent Runtime ---
+    AGENT_MAX_TOOL_CALLS: int = 1

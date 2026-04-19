@@ -84,13 +84,32 @@ def build_container(settings: Optional[Settings] = None) -> Container:
     from chatbot.planner.llm import LLMClient
     llm = LLMClient(s)
 
+    from chatbot.agent.tools import make_jina_search_tool
+    from chatbot.agent.graph import ConversationGraph
+
+    jina_tool = make_jina_search_tool(
+        base_url=s.JINA_SEARCH_BASE_URL,
+        api_key=s.JINA_API_KEY,
+        timeout_sec=s.JINA_SEARCH_TIMEOUT_SEC,
+        max_chars=getattr(s, "JINA_SEARCH_MAX_CHARS", 2000),
+    )
+    graph = ConversationGraph(
+        chat=llm.get_chat_model(),
+        base_tools=[jina_tool],  # fetch_context_tool 在 graph 内部创建
+        im=im,
+        agent_svc=agent_svc,
+        memory_svc=memory_svc,
+        llm=llm,
+        redis_svc=redis_svc,
+        max_tool_calls=getattr(s, "AGENT_MAX_TOOL_CALLS", 1),
+    )
+
     from chatbot.planner.planner import Planner
     planner = Planner(
         redis_svc=redis_svc,
-        im=im,
         llm=llm,
-        agent_svc=agent_svc,
         memory_svc=memory_svc,
+        graph=graph,
         window_sec=getattr(s, "WINDOW_SEC", 5),
     )
 

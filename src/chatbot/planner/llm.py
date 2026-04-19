@@ -14,18 +14,6 @@ from chatbot.settings import Settings
 
 
 @dataclass(frozen=True)
-class ReplyInputs:
-    agent_id: int
-    agent_name: str
-    agent_personality: str
-    trigger_reason: str
-    recent_messages: str
-    short_summary: str
-    long_summary: str
-    glossary_json: str
-
-
-@dataclass(frozen=True)
 class DecisionInputs:
     agents_json: str
     recent_messages_json: str
@@ -124,6 +112,9 @@ class LLMClient:
         except TypeError:
             self.chat = ChatOpenAI(**kwargs)
 
+    def get_chat_model(self) -> ChatOpenAI:
+        return self.chat
+
     async def decide_reply(self, inputs: DecisionInputs) -> DecisionOutput:
         system_text = prompts.DECISION_SYSTEM
         user_text = _render(
@@ -160,31 +151,6 @@ class LLMClient:
             primary_agent_id=primary_agent_id,
             reason=reason,
         )
-
-    async def generate_reply(self, inputs: ReplyInputs) -> str:
-        system_text = _render(
-            prompts.REPLY_SYSTEM,
-            agent_id=inputs.agent_id,
-            agent_name=inputs.agent_name,
-            personality=inputs.agent_personality or "",
-            intent="自然参与对话并直接回答",
-            trigger_reason=inputs.trigger_reason or "",
-        )
-        user_text = _render(
-            prompts.REPLY_USER,
-            recent_messages=inputs.recent_messages or "",
-            short_summary=inputs.short_summary or "",
-            long_summary=inputs.long_summary or "",
-            glossary_json=inputs.glossary_json or "[]",
-        )
-
-        msg = await self.chat.ainvoke(
-            [
-                SystemMessage(content=system_text),
-                HumanMessage(content=user_text),
-            ]
-        )
-        return (getattr(msg, "content", "") or "").strip()
 
     async def update_short_memory(self, inputs: ShortMemoryInputs) -> str:
         user_text = _render(

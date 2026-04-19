@@ -11,7 +11,7 @@ mkdir -p "$OUT_DIR"
 : > "$OUT_DIR/__init__.py"
 
 # 1) 生成：保持 include root 为 src/chatbot，使 import "proto/common.proto" 能被解析
-uv run python -m grpc_tools.protoc \
+uv run --python 3.11 python -m grpc_tools.protoc \
   -I "$SRC_DIR" \
   --python_out="$OUT_DIR" \
   --grpc_python_out="$OUT_DIR" \
