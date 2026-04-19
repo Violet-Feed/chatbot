@@ -3,10 +3,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langchain_community.utilities import JinaSearchAPIWrapper
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-
-from chatbot.utils.web_search import search_jina
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +16,17 @@ def make_jina_search_tool(
     timeout_sec: int,
     max_chars: int,
 ):
+    wrapper = JinaSearchAPIWrapper(jina_api_key=api_key)
+
     @tool
     async def jina_search(query: str) -> str:
         """联网搜索当前信息。当需要最新时事、价格、天气等实时内容时调用。"""
         logger.info("jina_search query=%r", query)
-        raw = await search_jina(
-            query,
-            base_url=base_url,
-            api_key=api_key,
-            timeout_sec=timeout_sec,
-        )
+        try:
+            raw = await wrapper.arun(query)
+        except Exception:
+            logger.exception("jina_search failed query=%r", query)
+            return "搜索失败，请根据已有知识回答"
         if not raw:
             return "搜索无结果，请直接根据已有知识回答"
         result = raw[:max_chars]
