@@ -61,11 +61,14 @@ class Settings(BaseSettings):
     QWEN_TEMPERATURE: float = 0.7
     QWEN_TIMEOUT_SEC: int = 30
 
-    # --- Jina Search ---
-    JINA_API_KEY: str = ""
-    JINA_SEARCH_BASE_URL: str = "https://s.jina.ai/"
-    JINA_SEARCH_TIMEOUT_SEC: int = 20
-    JINA_SEARCH_MAX_CHARS: int = 2000
+    # --- Web Search ---
+    BOCHA_API_KEY: str = ""
+    WEB_SEARCH_BASE_URL: str = "https://api.bochaai.com/v1/web-search"
+    WEB_SEARCH_TIMEOUT_SEC: int = 20
+    WEB_SEARCH_MAX_CHARS: int = 2000
+    WEB_SEARCH_DEFAULT_COUNT: int = 8
+    WEB_SEARCH_DEFAULT_FRESHNESS: str = "noLimit"
+    WEB_SEARCH_DEFAULT_SUMMARY: bool = True
 
     # --- Agent Runtime ---
     AGENT_MAX_TOOL_CALLS: int = 1

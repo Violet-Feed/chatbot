@@ -1,39 +1,81 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import urllib.request
 from typing import Any
 
-from langchain_community.utilities import JinaSearchAPIWrapper
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
 
-def make_jina_search_tool(
+def _web_search_sync(
+    query: str,
+    base_url: str,
+    api_key: str,
+    timeout_sec: int,
+    count: int,
+    freshness: str,
+    summary: bool,
+) -> str:
+    payload = {
+        "query": query,
+        "count": max(1, int(count)),
+        "freshness": freshness or "noLimit",
+        "summary": bool(summary),
+    }
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "User-Agent": "chatbot/1.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    req = urllib.request.Request(base_url.rstrip("/"), data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        raw = resp.read()
+    return raw.decode("utf-8", errors="ignore")
+
+
+def make_web_search_tool(
     base_url: str,
     api_key: str,
     timeout_sec: int,
     max_chars: int,
+    count: int = 8,
+    freshness: str = "noLimit",
+    summary: bool = True,
 ):
-    wrapper = JinaSearchAPIWrapper(jina_api_key=api_key)
-
     @tool
-    async def jina_search(query: str) -> str:
+    async def web_search(query: str) -> str:
         """联网搜索当前信息。当需要最新时事、价格、天气等实时内容时调用。"""
-        logger.info("jina_search query=%r", query)
+        logger.info("web_search query=%r", query)
         try:
-            raw = await wrapper.arun(query)
+            raw = await asyncio.to_thread(
+                _web_search_sync,
+                query,
+                base_url,
+                api_key,
+                timeout_sec,
+                count,
+                freshness,
+                summary,
+            )
         except Exception:
-            logger.exception("jina_search failed query=%r", query)
+            logger.exception("web_search failed query=%r", query)
             return "搜索失败，请根据已有知识回答"
         if not raw:
             return "搜索无结果，请直接根据已有知识回答"
         result = raw[:max_chars]
-        logger.info("jina_search result_len=%d", len(result))
+        logger.info("web_search result_len=%d", len(result))
         return result
 
-    return jina_search
+    return web_search
 
 
 def make_fetch_context_tool(im_client: Any, max_limit: int = 50):

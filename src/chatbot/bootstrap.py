@@ -84,18 +84,21 @@ def build_container(settings: Optional[Settings] = None) -> Container:
     from chatbot.agent.llm import LLMClient
     llm = LLMClient(s)
 
-    from chatbot.agent.tools import make_jina_search_tool
+    from chatbot.agent.tools import make_web_search_tool
     from chatbot.agent.graph import ConversationGraph
 
-    jina_tool = make_jina_search_tool(
-        base_url=s.JINA_SEARCH_BASE_URL,
-        api_key=s.JINA_API_KEY,
-        timeout_sec=s.JINA_SEARCH_TIMEOUT_SEC,
-        max_chars=getattr(s, "JINA_SEARCH_MAX_CHARS", 2000),
+    web_search_tool = make_web_search_tool(
+        base_url=s.WEB_SEARCH_BASE_URL,
+        api_key=s.BOCHA_API_KEY,
+        timeout_sec=s.WEB_SEARCH_TIMEOUT_SEC,
+        max_chars=getattr(s, "WEB_SEARCH_MAX_CHARS", 2000),
+        count=getattr(s, "WEB_SEARCH_DEFAULT_COUNT", 8),
+        freshness=getattr(s, "WEB_SEARCH_DEFAULT_FRESHNESS", "noLimit"),
+        summary=getattr(s, "WEB_SEARCH_DEFAULT_SUMMARY", True),
     )
     graph = ConversationGraph(
         chat=llm.get_chat_model(),
-        base_tools=[jina_tool],  # fetch_context_tool 在 graph 内部创建
+        base_tools=[web_search_tool],  # fetch_context_tool 在 graph 内部创建
         im=im,
         agent_svc=agent_svc,
         memory_svc=memory_svc,
