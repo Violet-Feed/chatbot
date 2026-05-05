@@ -18,9 +18,10 @@ class Container:
     redis: Any
     engine: AsyncEngine
     im: Any
+    aigc: Any
+    action: Any
 
     redis_svc: Any
-    agent_svc: Any
     memory_svc: Any
     llm: Any
 
@@ -35,6 +36,20 @@ class Container:
                 await close()
         except Exception:
             logger.exception("close im client failed")
+
+        try:
+            close = getattr(self.aigc, "aclose", None)
+            if callable(close):
+                await close()
+        except Exception:
+            logger.exception("close aigc client failed")
+
+        try:
+            close = getattr(self.action, "aclose", None)
+            if callable(close):
+                await close()
+        except Exception:
+            logger.exception("close action client failed")
 
         try:
             await self.engine.dispose()
@@ -69,10 +84,8 @@ def build_container(settings: Optional[Settings] = None) -> Container:
 
     engine, sf = _build_mysql_engine_and_sf(s.MYSQL_DSN)
 
-    from chatbot.dal.mysql.agent_service import AgentService
     from chatbot.dal.mysql.memory_service import MemoryService
 
-    agent_svc = AgentService(sf)
     memory_svc = MemoryService(sf)
 
     from chatbot.dal.redis.service import RedisService
@@ -81,39 +94,45 @@ def build_container(settings: Optional[Settings] = None) -> Container:
     from chatbot.dal.rpc.im import IMClient
     im = IMClient(target=s.IM_GRPC_TARGET)
 
-    from chatbot.agent.llm import LLMClient
-    llm = LLMClient(s)
+    from chatbot.dal.rpc.aigc import AigcClient
+    aigc = AigcClient(target=s.AIGC_GRPC_TARGET)
+
+    from chatbot.dal.rpc.action import ActionClient
+    action = ActionClient(target=s.ACTION_GRPC_TARGET)
 
     from chatbot.agent.tools import make_web_search_tool
-    from chatbot.agent.graph import ConversationGraph
+    from chatbot.agent.llm import LLMClient
 
     web_search_tool = make_web_search_tool(
         base_url=s.WEB_SEARCH_BASE_URL,
         api_key=s.BOCHA_API_KEY,
         timeout_sec=s.WEB_SEARCH_TIMEOUT_SEC,
-        max_chars=getattr(s, "WEB_SEARCH_MAX_CHARS", 2000),
-        count=getattr(s, "WEB_SEARCH_DEFAULT_COUNT", 8),
+        max_chars=getattr(s, "WEB_SEARCH_MAX_CHARS", 10000),
+        count=getattr(s, "WEB_SEARCH_DEFAULT_COUNT", 10),
         freshness=getattr(s, "WEB_SEARCH_DEFAULT_FRESHNESS", "noLimit"),
         summary=getattr(s, "WEB_SEARCH_DEFAULT_SUMMARY", True),
     )
+    llm = LLMClient(s, base_tools=[web_search_tool], im_client=im,
+                     max_tool_calls=getattr(s, "AGENT_MAX_TOOL_CALLS", 1))
+
+    from chatbot.agent.graph import ConversationGraph
+
     graph = ConversationGraph(
-        chat=llm.get_chat_model(),
-        base_tools=[web_search_tool],  # fetch_context_tool 在 graph 内部创建
         im=im,
-        agent_svc=agent_svc,
+        aigc=aigc,
         memory_svc=memory_svc,
         llm=llm,
         redis_svc=redis_svc,
-        max_tool_calls=getattr(s, "AGENT_MAX_TOOL_CALLS", 1),
     )
 
     from chatbot.agent.window import WindowManager
     planner = WindowManager(
         redis_svc=redis_svc,
-        llm=llm,
-        memory_svc=memory_svc,
         graph=graph,
-        window_sec=getattr(s, "WINDOW_SEC", 5),
+        im=im,
+        aigc=aigc,
+        action=action,
+        window_sec=getattr(s, "WINDOW_SEC", 10),
     )
 
     from chatbot.consumer.message_consumer import MessageConsumer, RocketMQConsumeConfig
@@ -137,8 +156,9 @@ def build_container(settings: Optional[Settings] = None) -> Container:
         redis=redis_client,
         engine=engine,
         im=im,
+        aigc=aigc,
+        action=action,
         redis_svc=redis_svc,
-        agent_svc=agent_svc,
         memory_svc=memory_svc,
         llm=llm,
         planner=planner,

@@ -34,14 +34,13 @@ class MemoryService:
     async def get_summary_state(self, con_short_id: int) -> SummaryState:
         sql = text(
             """
-            SELECT
-                short_summary,
-                long_summary,
-                short_version,
-                long_version,
-                short_updated_at,
-                long_updated_at,
-                updated_at
+            SELECT short_summary,
+                   long_summary,
+                   short_version,
+                   long_version,
+                   short_updated_at,
+                   long_updated_at,
+                   updated_at
             FROM chatbot_memory_summary
             WHERE con_short_id = :con_short_id
             """
@@ -76,27 +75,24 @@ class MemoryService:
         ts = now_ms()
         sql = text(
             """
-            INSERT INTO chatbot_memory_summary (
-                con_short_id,
-                short_summary,
-                long_summary,
-                short_version,
-                long_version,
-                short_updated_at,
-                long_updated_at,
-                updated_at
-            )
-            VALUES (
-                :con_short_id,
-                :short_summary,
-                '',
-                1,
-                0,
-                :ts,
-                0,
-                :ts
-            ) AS new
-            ON DUPLICATE KEY UPDATE
+            INSERT INTO chatbot_memory_summary (con_short_id,
+                                                short_summary,
+                                                long_summary,
+                                                short_version,
+                                                long_version,
+                                                short_updated_at,
+                                                long_updated_at,
+                                                updated_at)
+            VALUES (:con_short_id,
+                    :short_summary,
+                    '',
+                    1,
+                    0,
+                    :ts,
+                    0,
+                    :ts) AS new
+            ON DUPLICATE KEY
+            UPDATE
                 short_summary = new.short_summary,
                 short_version = chatbot_memory_summary.short_version + 1,
                 short_updated_at = new.short_updated_at,
@@ -119,27 +115,24 @@ class MemoryService:
         ts = now_ms()
         sql = text(
             """
-            INSERT INTO chatbot_memory_summary (
-                con_short_id,
-                short_summary,
-                long_summary,
-                short_version,
-                long_version,
-                short_updated_at,
-                long_updated_at,
-                updated_at
-            )
-            VALUES (
-                :con_short_id,
-                '',
-                :long_summary,
-                0,
-                1,
-                0,
-                :ts,
-                :ts
-            ) AS new
-            ON DUPLICATE KEY UPDATE
+            INSERT INTO chatbot_memory_summary (con_short_id,
+                                                short_summary,
+                                                long_summary,
+                                                short_version,
+                                                long_version,
+                                                short_updated_at,
+                                                long_updated_at,
+                                                updated_at)
+            VALUES (:con_short_id,
+                    '',
+                    :long_summary,
+                    0,
+                    1,
+                    0,
+                    :ts,
+                    :ts) AS new
+            ON DUPLICATE KEY
+            UPDATE
                 long_summary = new.long_summary,
                 long_version = chatbot_memory_summary.long_version + 1,
                 long_updated_at = new.long_updated_at,
@@ -179,21 +172,18 @@ class MemoryService:
 
         sql = text(
             """
-            INSERT INTO chatbot_memory_glossary (
-                con_short_id,
-                term,
-                meaning,
-                `count`,
-                updated_at
-            )
-            VALUES (
-                :con_short_id,
-                :term,
-                '',
-                1,
-                :updated_at
-            ) AS new
-            ON DUPLICATE KEY UPDATE
+            INSERT INTO chatbot_memory_glossary (con_short_id,
+                                                 term,
+                                                 meaning,
+                                                 `count`,
+                                                 updated_at)
+            VALUES (:con_short_id,
+                    :term,
+                    '',
+                    1,
+                    :updated_at) AS new
+            ON DUPLICATE KEY
+            UPDATE
                 `count` = chatbot_memory_glossary.`count` + 1,
                 updated_at = new.updated_at
             """
@@ -204,10 +194,10 @@ class MemoryService:
             await session.commit()
 
     async def get_terms_need_meaning(
-        self,
-        con_short_id: int,
-        min_count: int = 3,
-        limit: int = 20,
+            self,
+            con_short_id: int,
+            min_count: int = 5,
+            limit: int = 20,
     ) -> List[str]:
         sql = text(
             """
@@ -215,8 +205,7 @@ class MemoryService:
             FROM chatbot_memory_glossary
             WHERE con_short_id = :con_short_id
               AND `count` >= :min_count
-              AND meaning = ''
-            LIMIT :limit_n
+              AND meaning = '' LIMIT :limit_n
             """
         )
 
@@ -237,10 +226,49 @@ class MemoryService:
             if str(row.get("term") or "").strip()
         ]
 
+    async def get_terms_need_reinference(
+            self,
+            con_short_id: int,
+            min_count: int = 5,
+            step: int = 10,
+            limit: int = 20,
+    ) -> List[GlossaryItem]:
+        sql = text(
+            """
+            SELECT term, meaning, `count`
+            FROM chatbot_memory_glossary
+            WHERE con_short_id = :con_short_id
+              AND `count` >= :min_count
+              AND meaning <> ''
+              AND MOD(`count` - :min_count, :step) = 0 LIMIT :limit_n
+            """
+        )
+
+        async with self.sf() as session:
+            result = await session.execute(
+                sql,
+                {
+                    "con_short_id": con_short_id,
+                    "min_count": min_count,
+                    "step": step,
+                    "limit_n": limit,
+                },
+            )
+            rows = result.mappings().all()
+
+        return [
+            GlossaryItem(
+                term=str(row.get("term") or ""),
+                meaning=str(row.get("meaning") or ""),
+                count=int(row.get("count") or 0),
+            )
+            for row in rows
+        ]
+
     async def save_glossary_meanings(
-        self,
-        con_short_id: int,
-        items: Iterable[GlossaryItem],
+            self,
+            con_short_id: int,
+            items: Iterable[GlossaryItem],
     ) -> None:
         rows = []
         ts = now_ms()
@@ -264,21 +292,18 @@ class MemoryService:
 
         sql = text(
             """
-            INSERT INTO chatbot_memory_glossary (
-                con_short_id,
-                term,
-                meaning,
-                `count`,
-                updated_at
-            )
-            VALUES (
-                :con_short_id,
-                :term,
-                :meaning,
-                1,
-                :updated_at
-            ) AS new
-            ON DUPLICATE KEY UPDATE
+            INSERT INTO chatbot_memory_glossary (con_short_id,
+                                                 term,
+                                                 meaning,
+                                                 `count`,
+                                                 updated_at)
+            VALUES (:con_short_id,
+                    :term,
+                    :meaning,
+                    1,
+                    :updated_at) AS new
+            ON DUPLICATE KEY
+            UPDATE
                 meaning = new.meaning,
                 updated_at = new.updated_at
             """
@@ -289,10 +314,10 @@ class MemoryService:
             await session.commit()
 
     async def get_relevant_glossary(
-        self,
-        con_short_id: int,
-        recent_text: str,
-        limit: int = 20,
+            self,
+            con_short_id: int,
+            recent_text: str,
+            limit: int = 20,
     ) -> List[GlossaryItem]:
         recent_text = str(recent_text or "").strip()
 
@@ -304,8 +329,7 @@ class MemoryService:
                 WHERE con_short_id = :con_short_id
                   AND meaning <> ''
                   AND INSTR(:recent_text, term) > 0
-                ORDER BY term ASC
-                LIMIT :limit_n
+                ORDER BY term ASC LIMIT :limit_n
                 """
             )
             params = {
@@ -319,8 +343,7 @@ class MemoryService:
                 SELECT term, meaning, `count`
                 FROM chatbot_memory_glossary
                 WHERE con_short_id = :con_short_id
-                  AND meaning <> ''
-                LIMIT :limit_n
+                  AND meaning <> '' LIMIT :limit_n
                 """
             )
             params = {

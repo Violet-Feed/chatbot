@@ -5,7 +5,6 @@ import uuid
 from typing import List, Optional
 
 import grpc
-
 from chatbot.proto_gen import common_pb2, im_pb2, im_pb2_grpc
 
 
@@ -44,15 +43,15 @@ class IMClient:
         await self._channel.close()
 
     async def send_message(
-        self,
-        sender_id: int,
-        sender_type: int,
-        con_short_id: int,
-        con_id: str,
-        con_type: int,
-        msg_type: int,
-        msg_content: str,
-        client_msg_id: Optional[int] = None,
+            self,
+            sender_id: int,
+            sender_type: int,
+            con_short_id: int,
+            con_id: str,
+            con_type: int,
+            msg_type: int,
+            msg_content: str,
+            client_msg_id: Optional[int] = None,
     ) -> int:
         """调用 IMService.SendMessage 发送消息，返回 msg_id。"""
         if client_msg_id is None:
@@ -73,15 +72,17 @@ class IMClient:
         return int(resp.msg_id)
 
     async def get_message_by_conversation(
-        self,
-        user_id: int,
-        con_short_id: int,
-        con_index: int,
-        limit: int,
+            self,
+            sender_id: int,
+            sender_type: int,
+            con_short_id: int,
+            con_index: int,
+            limit: int,
     ) -> List[im_pb2.MessageBody]:
         """拉取某群会话消息（用于上下文补齐）。"""
         req = im_pb2.GetMessageByConversationRequest(
-            user_id=int(user_id),
+            sender_id=int(sender_id),
+            sender_type=int(sender_type),
             con_short_id=int(con_short_id),
             con_index=int(con_index),
             limit=int(limit),
@@ -91,6 +92,22 @@ class IMClient:
         )
         _ensure_success(resp.baseResp)
         return list(resp.msg_bodies)
+
+    async def get_conversation_info(
+            self,
+            user_id: int,
+            con_short_id: int,
+    ) -> im_pb2.ConversationInfo:
+        """获取会话信息（名称、描述等）。"""
+        req = im_pb2.GetConversationInfoRequest(
+            user_id=int(user_id),
+            con_short_id=int(con_short_id),
+        )
+        resp: im_pb2.GetConversationInfoResponse = await self._stub.GetConversationInfo(
+            req, timeout=self._timeout
+        )
+        _ensure_success(resp.baseResp)
+        return resp.con_info
 
     async def get_conversation_agents(self, con_short_id: int) -> List[im_pb2.ConversationAgentInfo]:
         """

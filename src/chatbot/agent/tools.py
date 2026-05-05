@@ -13,13 +13,13 @@ logger = logging.getLogger(__name__)
 
 
 def _web_search_sync(
-    query: str,
-    base_url: str,
-    api_key: str,
-    timeout_sec: int,
-    count: int,
-    freshness: str,
-    summary: bool,
+        query: str,
+        base_url: str,
+        api_key: str,
+        timeout_sec: int,
+        count: int,
+        freshness: str,
+        summary: bool,
 ) -> str:
     payload = {
         "query": query,
@@ -43,13 +43,13 @@ def _web_search_sync(
 
 
 def make_web_search_tool(
-    base_url: str,
-    api_key: str,
-    timeout_sec: int,
-    max_chars: int,
-    count: int = 8,
-    freshness: str = "noLimit",
-    summary: bool = True,
+        base_url: str,
+        api_key: str,
+        timeout_sec: int,
+        max_chars: int,
+        count: int = 8,
+        freshness: str = "noLimit",
+        summary: bool = True,
 ):
     @tool
     async def web_search(query: str) -> str:
@@ -72,29 +72,38 @@ def make_web_search_tool(
         if not raw:
             return "搜索无结果，请直接根据已有知识回答"
         result = raw[:max_chars]
-        logger.info("web_search result_len=%d", len(result))
+        logger.info("web_search result=%s", result)
         return result
 
     return web_search
 
 
 def make_fetch_context_tool(im_client: Any, max_limit: int = 50):
-    """创建一次，con_short_id 在调用时通过 config['configurable'] 注入。"""
+    """创建一次，con_short_id / min_con_index / sender_id / sender_type 在调用时通过 config['configurable'] 注入。"""
 
     @tool
     async def fetch_more_context(
-        limit: int = 30,
-        config: RunnableConfig = None,
+            limit: int = 30,
+            config: RunnableConfig = None,
     ) -> str:
-        """拉取当前会话更完整的历史消息。当已有上下文不足以理解对话背景时调用。limit 最多50条。"""
-        con_short_id = int((config or {}).get("configurable", {}).get("con_short_id", 0))
+        """拉取当前会话更早的历史消息。当已有上下文不足以理解对话背景时调用。limit 最多50条。"""
+        cfg = (config or {}).get("configurable", {})
+        con_short_id = int(cfg.get("con_short_id", 0))
+        min_con_index = int(cfg.get("min_con_index", 0) or 0)
+        sender_id = int(cfg.get("sender_id", 0) or 0)
+        sender_type = int(cfg.get("sender_type", 2) or 2)
+        con_index = min_con_index - 1 if min_con_index > 0 else 0
         limit = min(max(limit, 1), max_limit)
-        logger.info("fetch_more_context con_short_id=%d limit=%d", con_short_id, limit)
+        logger.info(
+            "fetch_more_context con_short_id=%d con_index=%d limit=%d",
+            con_short_id, con_index, limit,
+        )
         try:
             messages = await im_client.get_message_by_conversation(
-                user_id=0,
+                sender_id=sender_id,
+                sender_type=sender_type,
                 con_short_id=con_short_id,
-                con_index=0,
+                con_index=con_index,
                 limit=limit,
             )
         except Exception:
@@ -106,17 +115,17 @@ def make_fetch_context_tool(im_client: Any, max_limit: int = 50):
 
         lines: list[str] = []
         for msg in messages:
-            sender_id = int(getattr(msg, "sender_id", 0))
-            sender_type = int(getattr(msg, "sender_type", 0))
+            msg_sender_id = int(getattr(msg, "sender_id", 0))
+            msg_sender_type = int(getattr(msg, "sender_type", 0))
             content = str(getattr(msg, "msg_content", "") or "").replace("\n", " ").strip()
             if not content:
                 continue
-            if sender_type == 1:
-                role = f"用户 {sender_id}"
-            elif sender_type == 2:
-                role = f"Agent {sender_id}"
+            if msg_sender_type == 1:
+                role = f"用户 {msg_sender_id}"
+            elif msg_sender_type == 2:
+                role = f"Agent {msg_sender_id}"
             else:
-                role = f"未知 {sender_id}"
+                role = f"未知 {msg_sender_id}"
             lines.append(f"[{role}]\n{content}")
 
         return "\n\n".join(lines) if lines else "暂无有效历史消息"

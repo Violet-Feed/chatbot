@@ -4,13 +4,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Awaitable, Callable, Optional
 
 import orjson
+from chatbot.proto_gen import im_pb2  # 你的 proto_gen 在 chatbot 下
 from google.protobuf.json_format import MessageToDict
 from rocketmq.client import PushConsumer, ConsumeStatus  # rocketmq-client-python
-
-from chatbot.proto_gen import im_pb2  # 你的 proto_gen 在 chatbot 下
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +24,7 @@ class RocketMQConsumeConfig:
     subscription_expression: str = "*"
     handler_timeout_sec: float = 2.0
     drop_bad_json: bool = True
+
 
 def parse_message_event_json(raw: bytes) -> im_pb2.MessageEvent:
     obj = orjson.loads(raw)
@@ -88,7 +88,8 @@ class MessageConsumer:
 
                 try:
                     evt = parse_message_event_json(raw)
-                    logger.info("rocketmq: got message: %s", orjson.dumps(MessageToDict(evt, preserving_proto_field_name=True)).decode())
+                    logger.info("rocketmq: got message: %s",
+                                orjson.dumps(MessageToDict(evt, preserving_proto_field_name=True)).decode())
                 except Exception:
                     logger.exception("rocketmq: bad json payload")
                     return ConsumeStatus.CONSUME_SUCCESS if self._cfg.drop_bad_json else ConsumeStatus.RECONSUME_LATER
@@ -106,7 +107,8 @@ class MessageConsumer:
             consumer.subscribe(self._cfg.topic, _callback)
 
         consumer.start()
-        logger.info("rocketmq consumer started: %s %s %s",self._cfg.namesrv_addr, self._cfg.topic, self._cfg.consumer_group)
+        logger.info("rocketmq consumer started: %s %s %s", self._cfg.namesrv_addr, self._cfg.topic,
+                    self._cfg.consumer_group)
 
         try:
             await self._stop_evt.wait()

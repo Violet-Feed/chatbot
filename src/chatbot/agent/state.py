@@ -18,7 +18,10 @@ class ConversationState(TypedDict):
     con_id: str
     con_type: int
     items: List[Dict[str, Any]]
+    history_items: List[Dict[str, Any]]
     # load_context node
+    con_name: str
+    con_description: str
     agents: List[Agent]
     memory_state: Any
     glossary: List[Any]

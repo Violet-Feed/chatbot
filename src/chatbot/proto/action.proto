@@ -1,0 +1,349 @@
+syntax = "proto3";
+package action;
+option java_multiple_files = true;
+option java_package = "violet.gateway.common.proto_gen.action";
+option go_package = "im/proto_gen/action";
+
+import "proto/common.proto";
+
+message LoginRequest{
+  string username = 1;
+  string password = 2;
+}
+message LoginResponse{
+  int64 user_id = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message RegisterRequest{
+  string username = 1;
+  string password = 2;
+  string confirm_password = 3;
+}
+message RegisterResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message UserInfo{
+  int64 user_id = 1;
+  string username = 2;
+  string avatar = 3;
+  int64 create_time = 4;
+  int64 modify_time = 5;
+  int32 status = 6;
+  string extra = 7;
+}
+
+message GetUserInfosRequest{
+  repeated int64 user_ids = 1;
+}
+message GetUserInfosResponse{
+  repeated UserInfo user_infos = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message UpdateUserInfoRequest{
+  int64 user_id = 1;
+  string type = 2;
+  string value = 3;
+}
+message UpdateUserInfoResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message SearchUsersRequest{
+  string keyword = 1;
+  int32 page = 2;
+}
+message SearchUsersResponse{
+  repeated UserInfo user_infos = 1;
+  bool has_more = 2;
+  common.BaseResp baseResp = 255;
+}
+
+message FollowRequest{
+  int64 from_user_id = 1;
+  int64 to_user_id = 2;
+}
+message FollowResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message MIsFollowRequest{
+  int64 from_user_id = 1;
+  repeated int64 to_user_ids = 2;
+}
+message MIsFollowResponse{
+  map<int64, bool> is_following = 1;
+  map<int64, bool> is_follower = 2;
+  common.BaseResp baseResp = 255;
+}
+
+message GetFollowListRequest{
+  int64 user_id = 1;
+  int32 page = 2;
+}
+message GetFollowListResponse{
+  repeated int64 user_ids = 1;
+  bool has_more = 2;
+  common.BaseResp baseResp = 255;
+}
+
+message MGetFollowCountRequest{
+  repeated int64 user_ids = 1;
+  bool need_following = 2;
+  bool need_follower = 3;
+  bool need_friend = 4;
+}
+message MGetFollowCountResponse{
+  map<int64, int64> following_count = 1;
+  map<int64, int64> follower_count = 2;
+  map<int64, int64> friend_count = 3;
+  common.BaseResp baseResp = 255;
+}
+
+enum EntityType{
+  ENTITY_TYPE_Not_Use = 0;
+  user = 1;
+  creation = 2;
+  comment = 3;
+}
+
+message DiggRequest{
+  int64 user_id = 1;
+  string entity_type = 2;
+  int64 entity_id = 3;
+}
+message DiggResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message GetDiggListByUserRequest{
+  int64 user_id = 1;
+  string entity_type = 2;
+  int32 page = 3;
+}
+message GetDiggListByUserResponse{
+  repeated int64 entity_ids = 1;
+  bool has_more = 2;
+  common.BaseResp baseResp = 255;
+}
+
+message MGetDiggCountByEntityRequest{
+  string entity_type = 1;
+  repeated int64 entity_ids = 2;
+}
+message MGetDiggCountByEntityResponse{
+  map<int64, int64> entity_digg_count = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message MIsDiggRequest{
+  int64 user_id = 1;
+  string entity_type = 2;
+  repeated int64 entity_ids = 3;
+}
+message MIsDiggResponse{
+  map<int64, bool> is_digg = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message CommentData{
+  int64 user_id = 1;
+  int64 comment_id = 2;
+  int32 content_type = 3;
+  string content = 4;
+  int32 level = 5;
+  int64 parent_id = 6;
+  string entity_type = 7;
+  int64 entity_id = 8;
+  int64 sib_id = 9;
+  int64 sib_user_id = 10;
+  int64 create_time = 11;
+  string extra = 12;
+  int64 reply_count = 13;
+  int64 digg_count = 14;
+}
+
+message CreateCommentRequest{
+  int64 user_id = 1;
+  string entity_type = 2;
+  int64 entity_id = 3;
+  int32 content_type = 4;
+  string content = 5;
+}
+message CreateCommentResponse{
+  int64 comment_id = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message CreateCommentReplyRequest{
+  int64 user_id = 1;
+  int64 parent_id = 2;
+  string entity_type = 3;
+  int64 entity_id = 4;
+  int64 sib_id = 5;
+  int64 sib_user_id = 6;
+  int32 content_type = 7;
+  string content = 8;
+}
+message CreateCommentReplyResponse{
+  int64 comment_id = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message DeleteCommentRequest{
+  int64 user_id = 1;
+  int64 comment_id = 2;
+}
+message DeleteCommentResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message DeleteCommentReplyRequest{
+  int64 user_id = 1;
+  int64 reply_id = 2;
+}
+message DeleteCommentReplyResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message GetCommentByIdRequest{
+  int64 comment_id = 1;
+}
+message GetCommentByIdResponse{
+  CommentData comment = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCommentListRequest{
+  string entity_type = 1;
+  int64 entity_id = 2;
+  int32 page = 3;
+  string sort_type = 4;
+}
+message GetCommentListResponse{
+  repeated CommentData comments = 1;
+  bool has_more = 2;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCommentReplyListRequest{
+  string entity_type = 1;
+  int64 entity_id = 2;
+  int64 comment_id = 3;
+  int32 page = 4;
+}
+message GetCommentReplyListResponse{
+  repeated CommentData comments = 1;
+  bool has_more = 2;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCommentCountRequest{
+  string entity_type = 1;
+  int64 entity_id = 2;
+}
+message GetCommentCountResponse{
+  int64 comment_count = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message DiggCommentRequest{
+  int64 user_id = 1;
+  int64 comment_id = 2;
+}
+message DiggCommentResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message ForwardRequest{
+  int64 user_id = 1;
+  int64 creation_id = 2;
+  int64 con_short_id = 3;
+  string con_id = 4;
+  int32 con_type = 5;
+}
+message ForwardResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message GetForwardCountRequest{
+  int64 creation_id = 2;
+}
+message GetForwardCountResponse{
+  int64 forward_count = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message ReportClickRequest{
+  int64 user_id = 1;
+  repeated int64 creation_ids = 2;
+  int64 timestamp = 3;
+}
+message ReportClickResponse{
+  common.BaseResp baseResp = 255;
+}
+
+enum ActionType {
+  ActionType_Not_Use = 0;
+  Expo = 1;
+  Click = 2;
+  Digg = 3;
+  DiggComment = 4;
+  CreateComment = 5;
+  CreateReply = 6;
+  Forward = 7;
+}
+
+message ActionEvent {
+  int64 action_id = 1;
+  int32 action_type = 2;
+  int64 user_id = 3;
+  int64 timestamp = 4;
+  string creation_list = 5;
+  ActionPayload payload = 6;
+}
+
+message ActionPayload {
+  int64 author_id = 1;
+  int64 op_comment_id = 2;
+  int64 comment_id = 3;
+  int32 content_type = 4;
+  string content = 5;
+  int64 parent_comment_id = 6;
+}
+
+service ActionService {
+  rpc Login(LoginRequest)returns(LoginResponse){}
+  rpc Register(RegisterRequest)returns(RegisterResponse){}
+  rpc GetUserInfos(GetUserInfosRequest)returns(GetUserInfosResponse){}
+  rpc UpdateUserInfo(UpdateUserInfoRequest)returns(UpdateUserInfoResponse){}
+  rpc SearchUsers(SearchUsersRequest)returns(SearchUsersResponse){}
+  rpc Follow(FollowRequest)returns(FollowResponse){}
+  rpc Unfollow(FollowRequest)returns(FollowResponse){}
+  rpc MIsFollowing(MIsFollowRequest)returns(MIsFollowResponse){}
+  rpc MIsFollower(MIsFollowRequest)returns(MIsFollowResponse){}
+  rpc GetFollowingList(GetFollowListRequest)returns(GetFollowListResponse){}
+  rpc GetFollowerList(GetFollowListRequest)returns(GetFollowListResponse){}
+  rpc GetFriendList(GetFollowListRequest)returns(GetFollowListResponse){}
+  rpc MGetFollowCount(MGetFollowCountRequest)returns(MGetFollowCountResponse){}
+  rpc Digg(DiggRequest)returns(DiggResponse){}
+  rpc CancelDigg(DiggRequest)returns(DiggResponse){}
+  rpc GetDiggListByUser(GetDiggListByUserRequest)returns(GetDiggListByUserResponse){}
+  rpc MGetDiggCountByEntity(MGetDiggCountByEntityRequest)returns(MGetDiggCountByEntityResponse){}
+  rpc MIsDigg(MIsDiggRequest)returns(MIsDiggResponse){}
+  rpc CreateComment(CreateCommentRequest)returns(CreateCommentResponse){}
+  rpc CreateCommentReply(CreateCommentReplyRequest)returns(CreateCommentReplyResponse){}
+  rpc DeleteComment(DeleteCommentRequest)returns(DeleteCommentResponse){}
+  rpc DeleteCommentReply(DeleteCommentReplyRequest)returns(DeleteCommentReplyResponse){}
+  rpc GetCommentById(GetCommentByIdRequest)returns(GetCommentByIdResponse){}
+  rpc GetCommentList(GetCommentListRequest)returns(GetCommentListResponse){}
+  rpc GetCommentReplyList(GetCommentReplyListRequest)returns(GetCommentReplyListResponse){}
+  rpc GetCommentCount(GetCommentCountRequest)returns(GetCommentCountResponse){}
+  rpc DiggComment(DiggCommentRequest)returns(DiggCommentResponse){}
+  rpc CancelDiggComment(DiggCommentRequest)returns(DiggCommentResponse){}
+  rpc Forward(ForwardRequest)returns(ForwardResponse){}
+  rpc GetForwardCount(GetForwardCountRequest)returns(GetForwardCountResponse){}
+  rpc ReportClick(ReportClickRequest)returns(ReportClickResponse){}
+}

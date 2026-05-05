@@ -16,7 +16,9 @@ uv run --python 3.11 python -m grpc_tools.protoc \
   --python_out="$OUT_DIR" \
   --grpc_python_out="$OUT_DIR" \
   "$PROTO_DIR/common.proto" \
-  "$PROTO_DIR/im.proto"
+  "$PROTO_DIR/im.proto" \
+  "$PROTO_DIR/aigc.proto" \
+  "$PROTO_DIR/action.proto"
 
 # 2) 扁平化：把 proto_gen/proto 里的文件移到 proto_gen 根目录
 if [ -d "$OUT_DIR/proto" ]; then
@@ -37,5 +39,9 @@ for f in "$OUT_DIR/"*_pb2.py "$OUT_DIR/"*_pb2_grpc.py; do
     -e 's/^from proto import common_pb2 as /from . import common_pb2 as /' \
     -e 's/^import proto\.im_pb2 as /from . import im_pb2 as /' \
     -e 's/^from proto import im_pb2 as /from . import im_pb2 as /' \
+    -e 's/^import proto\.aigc_pb2 as /from . import aigc_pb2 as /' \
+    -e 's/^from proto import aigc_pb2 as /from . import aigc_pb2 as /' \
+    -e 's/^import proto\.action_pb2 as /from . import action_pb2 as /' \
+    -e 's/^from proto import action_pb2 as /from . import action_pb2 as /' \
     "$f"
 done

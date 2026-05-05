@@ -3,21 +3,21 @@ name = "chatbot"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-  "orjson>=3.10.0",
-  "pydantic>=2.7.0",
-  "pydantic-settings>=2.2.0",
-  "redis>=5.0.0",
-  "SQLAlchemy>=2.0.30",
-  "asyncmy>=0.2.9",
-  "rocketmq-client-python==2.0.0",
-  "grpcio>=1.62.0",
-  "grpcio-tools>=1.62.0",
-  "langchain>=0.2.0",
-  "langchain-core>=0.2.0",
-  "langchain-openai>=1.1.6",
-  "langchain-community>=0.2.0",
-  "langgraph>=0.2.0",
-  "tiktoken<0.12",
+    "orjson>=3.10.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "redis>=5.0.0",
+    "SQLAlchemy>=2.0.30",
+    "asyncmy>=0.2.9",
+    "rocketmq-client-python==2.0.0",
+    "grpcio>=1.62.0",
+    "grpcio-tools>=1.62.0",
+    "langchain>=0.2.0",
+    "langchain-core>=0.2.0",
+    "langchain-openai>=1.1.6",
+    "langchain-community>=0.2.0",
+    "langgraph>=0.2.0",
+    "tiktoken<0.12",
 ]
 
 [project.scripts]

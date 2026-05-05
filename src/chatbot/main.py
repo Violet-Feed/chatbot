@@ -88,5 +88,6 @@ async def _amain() -> None:
         await container.aclose()
         log.info("service stopped")
 
+
 if __name__ == "__main__":
     main()
