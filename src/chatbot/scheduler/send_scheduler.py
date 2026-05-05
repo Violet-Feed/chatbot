@@ -32,10 +32,10 @@ class SendScheduler:
     MAX_RETRY = 2
 
     def __init__(
-        self,
-        settings: Settings,
-        redis: "redis_async.Redis",
-        im: IMClient,
+            self,
+            settings: Settings,
+            redis: "redis_async.Redis",
+            im: IMClient,
     ) -> None:
         self.settings = settings
         self.r = redis

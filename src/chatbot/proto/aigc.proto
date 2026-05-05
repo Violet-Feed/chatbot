@@ -1,0 +1,267 @@
+syntax = "proto3";
+package creation;
+option java_multiple_files = true;
+option java_package = "violet.gateway.common.proto_gen.aigc";
+option go_package = "im/proto_gen/aigc";
+
+import "proto/common.proto";
+
+enum MaterialType{
+  MaterialType_Not_Use = 0;
+  Image = 1;
+  Video = 2;
+}
+
+enum MaterialStatus{
+  MaterialStatus_Not_Use = 0;
+  Generating = 1;
+  Succeeded = 2;
+  Failed = 3;
+  Deleted = 4;
+}
+
+message Material{
+  int64 material_id = 1;
+  int32 material_type = 2;
+  int64 user_id = 3;
+  string prompt = 4;
+  string source_url = 5;
+  string material_url = 6;
+  string cover_url = 7;
+  string model = 8;
+  int64 create_time = 9;
+  int32 status = 10;
+  string extra = 11;
+}
+
+message Creation{
+  int64 creation_id = 1;
+  int64 user_id = 2;
+  string cover_url = 3;
+  int64 material_id = 4;
+  int32 material_type = 5;
+  string material_url = 6;
+  string title = 7;
+  string content = 8;
+  string category = 9;
+  int64 create_time = 10;
+  int64 modify_time = 11;
+  int32 status = 12;
+  string extra = 13;
+}
+
+message CreateMaterialRequest{
+  int32 material_type = 1;
+  int64 user_id = 2;
+  string prompt = 3;
+  string source_url = 4;
+}
+message CreateMaterialResponse{
+  int64 material_id = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message VideoMaterialCallbackRequest{
+  string task_id = 1;
+  string status = 2;
+  string file_id = 3;
+  int32 status_code = 4;
+  string status_msg = 5;
+}
+message VideoMaterialCallbackResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message DeleteMaterialRequest{
+  int64 material_id = 1;
+  int64 user_id = 2;
+}
+message DeleteMaterialResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message GetMaterialByUserRequest{
+  int64 user_id = 1;
+  int32 page = 2;
+}
+message GetMaterialByUserResponse{
+  repeated Material material = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message CreateCreationRequest{
+  int64 material_id = 1;
+  int32 material_type = 2;
+  string material_url = 3;
+  int64 user_id = 4;
+  string title = 5;
+  string content = 6;
+  string category = 7;
+}
+message CreateCreationResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message DeleteCreationRequest{
+  int64 creation_id = 1;
+  int64 user_id = 2;
+}
+message DeleteCreationResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message UpdateCreationRequest{
+  int64 creation_id = 1;
+  int64 user_id = 2;
+  string title = 3;
+  string content = 4;
+  string category = 5;
+}
+message UpdateCreationResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message GetCreationByIdRequest{
+  int64 creation_id = 1;
+}
+message GetCreationByIdResponse{
+  Creation creation = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCreationByIdsRequest{
+  repeated int64 creation_ids = 1;
+}
+message GetCreationByIdsResponse{
+  map<int64, Creation> creations = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCreationsByUserRequest{
+  int64 user_id = 1;
+  int32 page = 2;
+}
+message GetCreationsByUserResponse{
+  repeated Creation creations = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCreationsByDiggRequest{
+  int64 user_id = 1;
+  int32 page = 2;
+}
+message GetCreationsByDiggResponse{
+  repeated Creation creations = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCreationsByFriendRequest{
+  int64 user_id = 1;
+  int32 page = 2;
+}
+message GetCreationsByFriendResponse{
+  repeated Creation creations = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCreationsByRecRequest{
+  int64 user_id = 1;
+}
+message GetCreationsByRecResponse{
+  repeated Creation creations = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetCreationsBySearchRequest{
+  string keyword = 1;
+  int32 page = 2;
+  int32 sort_type = 3;
+}
+message GetCreationsBySearchResponse{
+  repeated Creation creations = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message AgentInfo{
+  int64 agent_id = 1;
+  string agent_name = 2;
+  string avatar_uri = 3;
+  string description = 4;
+  string personality = 5;
+  int64 owner_id = 6;
+  int64 create_time = 7;
+  int64 modify_time = 8;
+  int32 status = 9;
+  string extra = 10;
+}
+
+message CreateAgentRequest{
+  int64 user_id = 1;
+  string agent_name = 2;
+  string avatar_uri = 3;
+  string description = 4;
+  string personality = 5;
+}
+message CreateAgentResponse{
+  int64 agent_id = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message DeleteAgentRequest{
+  int64 agent_id = 1;
+  int64 user_id = 2;
+}
+message DeleteAgentResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message UpdateAgentRequest{
+  int64 agent_id = 1;
+  int64 user_id = 2;
+  string agent_name = 3;
+  string avatar_uri = 4;
+  string description = 5;
+  string personality = 6;
+}
+message UpdateAgentResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message GetAgentsByIdsRequest{
+  repeated int64 agent_ids = 1;
+}
+message GetAgentsByIdsResponse{
+  repeated AgentInfo agent_infos = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetAgentsByUserRequest{
+  int64 user_id = 1;
+  int32 page = 2;
+}
+message GetAgentsByUserResponse{
+  repeated AgentInfo agent_infos = 1;
+  common.BaseResp baseResp = 255;
+}
+
+service AigcService {
+  rpc CreateMaterial(CreateMaterialRequest)returns(CreateMaterialResponse){}
+  rpc DeleteMaterial(DeleteMaterialRequest)returns(DeleteMaterialResponse){}
+  rpc VideoMaterialCallback(VideoMaterialCallbackRequest)returns(VideoMaterialCallbackResponse){}
+  rpc GetMaterialByUser(GetMaterialByUserRequest)returns(GetMaterialByUserResponse){}
+  rpc CreateCreation(CreateCreationRequest)returns(CreateCreationResponse){}
+  rpc DeleteCreation(DeleteCreationRequest)returns(DeleteCreationResponse){}
+  rpc UpdateCreation(UpdateCreationRequest)returns(UpdateCreationResponse){}
+  rpc GetCreationById(GetCreationByIdRequest)returns(GetCreationByIdResponse){}
+  rpc GetCreationByIds(GetCreationByIdsRequest)returns(GetCreationByIdsResponse){}
+  rpc GetCreationsByUser(GetCreationsByUserRequest)returns(GetCreationsByUserResponse){}
+  rpc GetCreationsByDigg(GetCreationsByDiggRequest)returns(GetCreationsByDiggResponse){}
+  rpc GetCreationsByFriend(GetCreationsByFriendRequest)returns(GetCreationsByFriendResponse){}
+  rpc GetCreationsByRec(GetCreationsByRecRequest)returns(GetCreationsByRecResponse){}
+  rpc GetCreationsBySearch(GetCreationsBySearchRequest)returns(GetCreationsBySearchResponse){}
+  rpc CreateAgent(CreateAgentRequest)returns(CreateAgentResponse){}
+  rpc DeleteAgent(DeleteAgentRequest)returns(DeleteAgentResponse){}
+  rpc UpdateAgent(UpdateAgentRequest)returns(UpdateAgentResponse){}
+  rpc GetAgentsByIds(GetAgentsByIdsRequest)returns(GetAgentsByIdsResponse){}
+  rpc GetAgentsByUser(GetAgentsByUserRequest)returns(GetAgentsByUserResponse){}
+}

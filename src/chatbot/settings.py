@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 def _project_root() -> Path:
     # settings.py 在 src/chatbot/ 下：向上两级是项目根（chatbot/）
     return Path(__file__).resolve().parents[2]
+
 
 class Settings(BaseSettings):
     """
@@ -33,8 +36,14 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
     MYSQL_DSN: str = "mysql+asyncmy://root:password@127.0.0.1:3306/violet?charset=utf8mb4"
 
+    # --- Action gRPC ---
+    ACTION_GRPC_TARGET: str = "127.0.0.1:3003"
+
     # --- IMService gRPC ---
-    IM_GRPC_TARGET: str = "127.0.0.1:50051"
+    IM_GRPC_TARGET: str = "127.0.0.1:3004"
+
+    # --- AIGC gRPC ---
+    AIGC_GRPC_TARGET: str = "127.0.0.1:3005"
 
     # --- Window policy (5s + 10s) ---
     WINDOW_BASE_MS: int = 5000
@@ -61,7 +70,14 @@ class Settings(BaseSettings):
     QWEN_TEMPERATURE: float = 0.7
     QWEN_TIMEOUT_SEC: int = 30
 
-    # --- Jina Search ---
-    JINA_API_KEY: str = ""
-    JINA_SEARCH_BASE_URL: str = "https://s.jina.ai/http://www.google.com/search?q="
-    JINA_SEARCH_TIMEOUT_SEC: int = 20
+    # --- Web Search ---
+    BOCHA_API_KEY: str = ""
+    WEB_SEARCH_BASE_URL: str = "https://api.bochaai.com/v1/web-search"
+    WEB_SEARCH_TIMEOUT_SEC: int = 20
+    WEB_SEARCH_MAX_CHARS: int = 10000
+    WEB_SEARCH_DEFAULT_COUNT: int = 10
+    WEB_SEARCH_DEFAULT_FRESHNESS: str = "noLimit"
+    WEB_SEARCH_DEFAULT_SUMMARY: bool = True
+
+    # --- Agent Runtime ---
+    AGENT_MAX_TOOL_CALLS: int = 2

@@ -20,9 +20,12 @@ enum MessageType{
   Image = 2;
   Video = 3;
   Forward = 4;
+  Hidden = 5;
   Conversation = 100;
   MarkRead = 101;
   UpdateMessage = 102;
+  UpdateSetting = 103;
+  UpdateMember = 104;
 }
 
 enum ConMessageType{
@@ -35,6 +38,16 @@ enum ConMessageType{
   Disband = 6;
   Add_Agent = 7;
   Remove_Agent = 8;
+}
+
+enum UpdateSettingType{
+  UpdateSettingType_Not_Use = 0;
+  Modify_Min_Index = 1;
+}
+
+enum UpdateMemberType{
+  UpdateMemberType_Not_Use = 0;
+  Modify_Nickname = 1;
 }
 
 enum SenderType{
@@ -126,6 +139,24 @@ message ConversationUserInfo {
   string extra = 8;
 }
 
+message ForwardMessage {
+  int64 creation_id = 1;
+  string title = 2;
+  int32 material_type = 3;
+  string cover_url = 4;
+  int64 author_id = 5;
+  string author_name = 6;
+  string author_avatar_url = 7;
+}
+
+message GetInitInfoRequest{
+  int64 user_id = 1;
+}
+message GetInitInfoResponse{
+  int64 user_cmd_index = 1;
+  common.BaseResp baseResp = 255;
+}
+
 message SendMessageRequest{
   int64 sender_id = 1;
   int32 sender_type = 2;
@@ -166,10 +197,11 @@ message GetCommandByUserResponse{
 }
 
 message GetMessageByConversationRequest{
-  int64 user_id = 1;
-  int64 con_short_id = 2;
-  int64 con_index = 3;
-  int64 limit = 4;
+  int64 sender_id = 1;
+  int32 sender_type = 2;
+  int64 con_short_id = 3;
+  int64 con_index = 4;
+  int64 limit = 5;
 }
 message GetMessageByConversationResponse{
   repeated MessageBody msg_bodies = 1;
@@ -183,6 +215,15 @@ message MarkReadRequest{
   int64 read_badge_count = 4;
 }
 message MarkReadResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message RecallMessageRequest{
+  int64 user_id = 1;
+  int64 con_short_id = 2;
+  int64 msg_id = 3;
+}
+message RecallMessageResponse{
   common.BaseResp baseResp = 255;
 }
 
@@ -211,13 +252,51 @@ message GetConversationInfoResponse{
   common.BaseResp baseResp = 255;
 }
 
+message UpdateConversationCoreRequest{
+  int64 con_short_id = 1;
+  int64 user_id = 2;
+  string type = 3;
+  string value = 4;
+}
+message UpdateConversationCoreResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message UpdateConversationSettingRequest{
+  int64 con_short_id = 1;
+  int64 user_id = 2;
+  string type = 3;
+  string value = 4;
+}
+message UpdateConversationSettingResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message UpdateConversationMemberRequest{
+  int64 con_short_id = 1;
+  int64 user_id = 2;
+  string type = 3;
+  string value = 4;
+}
+message UpdateConversationMemberResponse{
+  common.BaseResp baseResp = 255;
+}
+
 message AddConversationMembersRequest{
   int64 con_short_id = 1;
-  string con_id = 2;
-  repeated int64 members = 3;
-  int64 operator = 4;
+  repeated int64 members = 2;
+  int64 operator = 3;
 }
 message AddConversationMembersResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message RemoveConversationMemberRequest{
+  int64 con_short_id = 1;
+  int64 member = 2;
+  int64 operator = 3;
+}
+message RemoveConversationMemberResponse{
   common.BaseResp baseResp = 255;
 }
 
@@ -225,6 +304,15 @@ message GetConversationMembersRequest{
   int64 con_short_id = 1;
 }
 message GetConversationMembersResponse{
+  repeated ConversationUserInfo members = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetConversationMembersByIdsRequest{
+  int64 con_short_id = 1;
+  repeated int64 member_ids = 2;
+}
+message GetConversationMembersByIdsResponse{
   repeated ConversationUserInfo members = 1;
   common.BaseResp baseResp = 255;
 }
@@ -248,11 +336,19 @@ message ConversationAgentInfo{
 
 message AddConversationAgentsRequest{
   int64 con_short_id = 1;
-  string con_id = 2;
-  repeated int64 agent_ids = 3;
-  int64 operator = 4;
+  repeated int64 agent_ids = 2;
+  int64 operator = 3;
 }
 message AddConversationAgentsResponse{
+  common.BaseResp baseResp = 255;
+}
+
+message RemoveConversationAgentRequest{
+  int64 con_short_id = 1;
+  int64 agent_id = 2;
+  int64 operator = 3;
+}
+message RemoveConversationAgentResponse{
   common.BaseResp baseResp = 255;
 }
 
@@ -260,6 +356,15 @@ message GetConversationAgentsRequest{
   int64 con_short_id = 1;
 }
 message GetConversationAgentsResponse{
+  repeated ConversationAgentInfo agents = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message GetConversationAgentsByIdsRequest{
+  int64 con_short_id = 1;
+  repeated int64 agent_ids = 2;
+}
+message GetConversationAgentsByIdsResponse{
   repeated ConversationAgentInfo agents = 1;
   common.BaseResp baseResp = 255;
 }
@@ -348,18 +453,27 @@ message MarkNoticeReadResponse{
 }
 
 service IMService{
+  rpc GetInitInfo(GetInitInfoRequest)returns(GetInitInfoResponse);
   rpc SendMessage(SendMessageRequest)returns(SendMessageResponse);
   rpc GetMessageByUser(GetMessageByUserRequest)returns(GetMessageByUserResponse);
   rpc GetCommandByUser(GetCommandByUserRequest)returns(GetCommandByUserResponse);
   rpc GetMessageByConversation(GetMessageByConversationRequest)returns(GetMessageByConversationResponse);
   rpc MarkRead(MarkReadRequest)returns(MarkReadResponse);
+  rpc RecallMessage(RecallMessageRequest)returns(RecallMessageResponse);
   rpc CreateConversation(CreateConversationRequest)returns(CreateConversationResponse);
   rpc GetConversationInfo(GetConversationInfoRequest)returns(GetConversationInfoResponse);
+  rpc UpdateConversationCore(UpdateConversationCoreRequest)returns(UpdateConversationCoreResponse);
+  rpc UpdateConversationSetting(UpdateConversationSettingRequest)returns(UpdateConversationSettingResponse);
+  rpc UpdateConversationMember(UpdateConversationMemberRequest)returns(UpdateConversationMemberResponse);
   rpc AddConversationMembers(AddConversationMembersRequest)returns(AddConversationMembersResponse);
+  rpc RemoveConversationMember(RemoveConversationMemberRequest)returns(RemoveConversationMemberResponse);
   rpc GetConversationMembers(GetConversationMembersRequest)returns(GetConversationMembersResponse);
+  rpc GetConversationMembersByIds(GetConversationMembersByIdsRequest)returns(GetConversationMembersByIdsResponse);
   rpc GetMembersReadIndex(GetMembersReadIndexRequest)returns(GetMembersReadIndexResponse);
   rpc AddConversationAgents(AddConversationAgentsRequest)returns(AddConversationAgentsResponse);
+  rpc RemoveConversationAgent(RemoveConversationAgentRequest)returns(RemoveConversationAgentResponse);
   rpc GetConversationAgents(GetConversationAgentsRequest)returns(GetConversationAgentsResponse);
+  rpc GetConversationAgentsByIds(GetConversationAgentsByIdsRequest)returns(GetConversationAgentsByIdsResponse);
   rpc SendNotice(SendNoticeRequest)returns(SendNoticeResponse);
   rpc GetNoticeList(GetNoticeListRequest)returns(GetNoticeListResponse);
   rpc GetNoticeAggList(GetNoticeAggListRequest)returns(GetNoticeAggListResponse);
