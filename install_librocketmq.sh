@@ -17,14 +17,14 @@ else
 fi
 
 echo "[2/5] Installing deb via dpkg"
-sudo dpkg -i "$DEB" || true
+dpkg -i "$DEB" || true
 
 echo "[3/5] Fixing dependencies (apt-get -f install)"
-sudo apt-get update -y
-sudo apt-get -f install -y
+apt-get update -y
+apt-get -f install -y
 
 echo "[4/5] Running ldconfig"
-sudo ldconfig
+ldconfig
 
 echo "[5/5] Verify"
 ldconfig -p | grep -i rocketmq || true
