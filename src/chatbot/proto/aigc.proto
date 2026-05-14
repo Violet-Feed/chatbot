@@ -30,8 +30,9 @@ message Material{
   string cover_url = 7;
   string model = 8;
   int64 create_time = 9;
-  int32 status = 10;
-  string extra = 11;
+  int64 modify_time = 10;
+  int32 status = 11;
+  string extra = 12;
 }
 
 message Creation{
@@ -58,6 +59,14 @@ message CreateMaterialRequest{
 }
 message CreateMaterialResponse{
   int64 material_id = 1;
+  common.BaseResp baseResp = 255;
+}
+
+message ReCreateMaterialRequest{
+  int64 material_id = 1;
+  int64 user_id = 2;
+}
+message ReCreateMaterialResponse{
   common.BaseResp baseResp = 255;
 }
 
@@ -246,6 +255,7 @@ message GetAgentsByUserResponse{
 
 service AigcService {
   rpc CreateMaterial(CreateMaterialRequest)returns(CreateMaterialResponse){}
+  rpc ReCreateMaterial(ReCreateMaterialRequest)returns(ReCreateMaterialResponse){}
   rpc DeleteMaterial(DeleteMaterialRequest)returns(DeleteMaterialResponse){}
   rpc VideoMaterialCallback(VideoMaterialCallbackRequest)returns(VideoMaterialCallbackResponse){}
   rpc GetMaterialByUser(GetMaterialByUserRequest)returns(GetMaterialByUserResponse){}

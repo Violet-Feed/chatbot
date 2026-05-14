@@ -145,8 +145,6 @@ message ForwardMessage {
   int32 material_type = 3;
   string cover_url = 4;
   int64 author_id = 5;
-  string author_name = 6;
-  string author_avatar_url = 7;
 }
 
 message GetInitInfoRequest{
@@ -236,7 +234,8 @@ message CreateConversationRequest{
   string notice = 6;
   int64 owner_id = 7;
   repeated int64 members = 8;
-  string extra = 9;
+  repeated int64 agent_members = 9;
+  string extra = 10;
 }
 message CreateConversationResponse{
   ConversationCoreInfo con_core_info = 1;
@@ -435,12 +434,12 @@ message GetNoticeAggListResponse{
   bool has_more = 2;
   common.BaseResp baseResp = 255;
 }
-message GetNoticeCountRequest{
+message GetNoticeCountsRequest{
   int64 user_id = 1;
-  int32 group = 2;
+  repeated int32 groups = 2;
 }
-message GetNoticeCountResponse{
-  int64 notice_count = 1;
+message GetNoticeCountsResponse{
+  map<int32, int64> notice_count = 1;
   common.BaseResp baseResp = 255;
 }
 
@@ -477,6 +476,6 @@ service IMService{
   rpc SendNotice(SendNoticeRequest)returns(SendNoticeResponse);
   rpc GetNoticeList(GetNoticeListRequest)returns(GetNoticeListResponse);
   rpc GetNoticeAggList(GetNoticeAggListRequest)returns(GetNoticeAggListResponse);
-  rpc GetNoticeCount(GetNoticeCountRequest)returns(GetNoticeCountResponse);
+  rpc GetNoticeCounts(GetNoticeCountsRequest)returns(GetNoticeCountsResponse);
   rpc MarkNoticeRead(MarkNoticeReadRequest)returns(MarkNoticeReadResponse);
 }
