@@ -22,7 +22,6 @@ dependencies = [
 
 [project.scripts]
 chatbot-bot = "chatbot.main:main"
-chatbot-scheduler = "chatbot.workers.send_scheduler_worker:main"
 
 [tool.uv]
 package = true
